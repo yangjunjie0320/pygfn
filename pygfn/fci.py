@@ -43,7 +43,8 @@ class GreensFunctionMixin(lib.StreamObject):
     def solve_gf_ea(self):
         raise NotImplementedError
 
-    def solve_gf(self, omegas, ps=None, qs=None, eta=0.01, name="ip", verbose=None):
+    def solve_gf(self, omegas, ps=None, qs=None, eta=0.01,
+                 name="ip", method="direct", verbose=None):
         name = name.lower()
         assert name.lower() in ["ip", "ea"]
 
@@ -57,11 +58,15 @@ class GreensFunctionMixin(lib.StreamObject):
 
         vec_size = 0
         amp_size = 0
+        ene0 = self.ene0
+        vec0 = self.vec0
+        amp0 = self.amp0
+        assert vec0.shape == (vec_size,)
 
         if name == "ip":
             rhs_n   = self.get_rhs_ip(qs, verbose=verbose)
             lag_n   = self.get_lag_ip(ps, verbose=verbose)
-            hop_n, hdiag_n = self.gen_hop_ip(verbose=verbose)
+            ham_n, hdiag_n = self.gen_hop_ip(verbose=verbose, method=method)
 
             amp_n_size = 0
             vec_n_size = 0
@@ -70,27 +75,36 @@ class GreensFunctionMixin(lib.StreamObject):
             assert lag_n.shape   == (np, vec_n_size)
             assert hdiag_n.shape == (vec_n_size,)
 
+            if method == "slow":
+                assert ham_n.shape == (vec_n_size, vec_n_size)
+            else:
+                assert callable(ham_n)
+
+                def hv0(v):
+                    hv_real = ham_n(v.real)
+                    hv_imag = ham_n(v.imag)
+                    return hv_real + 1j * hv_imag - e0 * v
+
+                hv0_omega_eta = lambda v: hv0(v) + (omega + 1j * eta) * v
+
         elif name == "ea":
-            rhs_n   = self.get_rhs_ea(qs, verbose=verbose)
-            lag_n   = self.get_lag_ea(ps, verbose=verbose)
-            hop_n, hdiag_n = self.gen_hop_ea(verbose=verbose)
+            rhs_n   = self.get_rhs_ea(ps, verbose=verbose)
+            lag_n   = self.get_lag_ea(qs, verbose=verbose)
+            hop_n, hdiag_n = self.gen_hop_ea(verbose=verbose, method=method)
 
             amp_n_size = 0
             vec_n_size = 0
 
-            assert rhs_n.shape   == (nq, vec_n_size)
-            assert lag_n.shape   == (np, vec_n_size)
+            assert rhs_n.shape   == (np, vec_n_size)
+            assert lag_n.shape   == (nq, vec_n_size)
             assert hdiag_n.shape == (vec_n_size,)
 
         else:
             raise ValueError
 
         def gen_gf(omega):
-            omega_e0_eta = omega + 1j * eta
-            hdiag_omega  = hdiag_ + omega_e0_eta
-
-            def h_omega(x):
-                return hop.dot(x) - omega_e0_eta * x
+            hv_e0     = hop_n(v) - e0 * v
+            omega_eta = omega + 1j * eta
 
     def get_rhs_ip(self, orb_list=None, verbose=None):
         raise NotImplementedError
