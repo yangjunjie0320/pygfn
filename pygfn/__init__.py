@@ -1,1 +1,1 @@
-from qcgf.fcigf import FCIGF
+from pygfn.fci import FCIGF
