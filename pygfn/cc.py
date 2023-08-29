@@ -14,66 +14,6 @@ from pyscf import __config__
 from pygfn.lib import gmres
 from pygfn.fci import GreensFunctionMixin
 
-@profile
-def greens_b_singles_ea_rhf(t1, p):
-    nocc, nvir = t1.shape
-    ds_type = t1.dtype
-    if p < nocc:
-        return -t1[p,:]
-    else:
-        p = p-nocc
-        result = numpy.zeros((nvir,), dtype=ds_type)
-        result[p] = 1.0
-        return result
-
-@profile
-def greens_b_doubles_ea_rhf(t2, p):
-    nocc, _, nvir, _ = t2.shape
-    ds_type = t2.dtype
-    if p < nocc:
-        return -t2[p,:,:,:]
-    else:
-        return numpy.zeros((nocc,nvir,nvir), dtype=ds_type)
-
-@profile
-def greens_b_vector_ea_rhf(cc, p, vec0):
-    return amplitudes_to_vector_ea(
-        greens_b_singles_ea_rhf(cc.t1, p),
-        greens_b_doubles_ea_rhf(cc.t2, p),
-    )
-
-@profile
-def greens_b_singles_ip_rhf(t1, p):
-    nocc, nvir = t1.shape
-    ds_type = t1.dtype
-    if p < nocc:
-        result = numpy.zeros((nocc,), dtype=ds_type)
-        result[p] = 1.0
-        return result
-    else:
-        p = p-nocc
-        return t1[:,p]
-
-@profile
-def greens_b_doubles_ip_rhf(t2, p):
-    nocc, _, nvir, _ = t2.shape
-    ds_type = t2.dtype
-    if p < nocc:
-        return numpy.zeros((nocc,nocc,nvir), dtype=ds_type)
-    else:
-        p = p-nocc
-        return t2[:,:,p,:]
-
-@profile
-def greens_b_vector_ip_rhf(cc, p, vec0):
-    return amplitudes_to_vector_ip(
-        greens_b_singles_ip_rhf(cc.t1, p),
-        greens_b_doubles_ip_rhf(cc.t2, p),
-    )
-
-
-
-
 class CoupledClusterSingleDoubleSpin0Slow(GreensFunctionMixin):
     is_approx_lambda = True
     def __init__(self, hf_obj):
@@ -114,7 +54,6 @@ class CoupledClusterSingleDoubleSpin0Slow(GreensFunctionMixin):
         self.vec0 = vec0
         self.amp0 = amp0
 
-    @profile
     def get_rhs_ip(self, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = numpy.array(orb_list if orb_list is not None else range(norb))
@@ -123,22 +62,18 @@ class CoupledClusterSingleDoubleSpin0Slow(GreensFunctionMixin):
         nvir = norb - nocc
         t1, t2 = self.amp0
 
-        def gen_rhs_occ(i):
-            rhs_ip_1 = numpy.zeros((nocc,))
-            rhs_ip_2 = numpy.zeros((nocc, nocc, nvir))
-            rhs_ip_1[i] = 1.0
-            return amplitudes_to_vector_ip(rhs_ip_1, rhs_ip_2)
+        rhs_ip_list = []
+        for p in orb_list:
+            if p < nocc:
+                rhs_ip = numpy.zeros((nocc + nocc * nocc * nvir,))
+                rhs_ip[p] = 1.0
 
-        def gen_rhs_vir(a):
-            rhs_ip_1 = t1[:, a-nocc]
-            rhs_ip_2 = t2[:, :, a-nocc, :]
-            return amplitudes_to_vector_ip(rhs_ip_1, rhs_ip_2)
+            else:
+                rhs_ip = amplitudes_to_vector_ip(t1[:, p-nocc], t2[:, :, p-nocc, :])
 
-        mask_occ = orb_list < nocc
-        mask_vir = ~mask_occ
-        rhs_ip_occ = [gen_rhs_occ(i) for i in orb_list[mask_occ]]
-        rhs_ip_vir = [gen_rhs_vir(a) for a in orb_list[mask_vir]]
-        rhs_ip = numpy.array(rhs_ip_occ + rhs_ip_vir)
+            rhs_ip_list.append(rhs_ip)
+
+        rhs_ip = numpy.array(rhs_ip_list)
         return rhs_ip
 
     def get_lhs_ip(self, orb_list=None, verbose=None):
@@ -153,7 +88,6 @@ class CoupledClusterSingleDoubleSpin0Slow(GreensFunctionMixin):
 
         return lhs_ip
 
-    @profile
     def get_rhs_ea(self, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = numpy.array(orb_list if orb_list is not None else range(norb))
@@ -162,22 +96,18 @@ class CoupledClusterSingleDoubleSpin0Slow(GreensFunctionMixin):
         nvir = norb - nocc
         t1, t2 = self.amp0
 
-        def gen_rhs_occ(i):
-            rhs_ea_1 = -t1[i, :]
-            rhs_ea_2 = -t2[i, :, :, :]
-            return amplitudes_to_vector_ea(rhs_ea_1, rhs_ea_2)
+        rhs_ea_list = []
+        for q in orb_list:
+            if q >= nocc:
+                rhs_ea = numpy.zeros((nvir + nocc * nvir * nvir,))
+                rhs_ea[q-nocc] = 1.0
 
-        def gen_rhs_vir(a):
-            rhs_ea_1 = numpy.zeros((nvir,))
-            rhs_ea_2 = numpy.zeros((nocc, nvir, nvir))
-            rhs_ea_1[a-nocc] = 1.0
-            return amplitudes_to_vector_ea(rhs_ea_1, rhs_ea_2)
+            else:
+                rhs_ea = amplitudes_to_vector_ea(-t1[q, :], -t2[q, :, :, :])
 
-        mask_occ = orb_list < nocc
-        mask_vir = ~mask_occ
-        rhs_ea_occ = [gen_rhs_occ(i) for i in orb_list[mask_occ]]
-        rhs_ea_vir = [gen_rhs_vir(a) for a in orb_list[mask_vir]]
-        rhs_ea = numpy.array(rhs_ea_occ + rhs_ea_vir)
+            rhs_ea_list.append(rhs_ea)
+
+        rhs_ea = numpy.array(rhs_ea_list)
         return rhs_ea
 
     def get_lhs_ea(self, orb_list=None, verbose=None):
@@ -257,31 +187,20 @@ def CCGF(hf_obj, method="slow"):
 
 if __name__ == '__main__':
     from pyscf import gto, scf
-    m = gto.M(
-        atom='''
-          H    2.1489399    1.2406910    0.0000000
-          C    1.2116068    0.6995215    0.0000000
-          C    1.2116068   -0.6995215    0.0000000
-          H    2.1489399   -1.2406910    0.0000000
-          C   -0.0000000   -1.3990430   -0.0000000
-          H   -0.0000000   -2.4813820   -0.0000000
-          C   -1.2116068   -0.6995215   -0.0000000
-          H   -2.1489399   -1.2406910   -0.0000000
-          C   -1.2116068    0.6995215   -0.0000000
-          H   -2.1489399    1.2406910   -0.0000000
-          C    0.0000000    1.3990430    0.0000000
-          H    0.0000000    2.4813820    0.0000000
-        ''', basis='ccpvdz', verbose=0,
-    )
 
+    m = gto.M(
+        atom='H 0 0 0; Li 0 0 1.1',
+        basis='sto3g',
+        verbose=0,
+    )
     rhf_obj = scf.RHF(m)
     rhf_obj.verbose = 0
     rhf_obj.kernel()
 
     cc_obj = cc.CCSD(rhf_obj)
     cc_obj.verbose = 4
-    cc_obj.conv_tol = 1e-2
-    cc_obj.conv_tol_normt = 1e-2
+    cc_obj.conv_tol = 1e-8
+    cc_obj.conv_tol_normt = 1e-8
     ene_ccsd, t1, t2 = cc_obj.kernel()
     assert cc_obj.converged
     vec0 = cc_obj.amplitudes_to_vector(t1, t2)
@@ -299,29 +218,22 @@ if __name__ == '__main__':
     gfn_obj.conv_tol = 1e-8
     gfn_obj.build(vec0=vec0)
 
-    import time
-
-    time0 = time.time()
     rhs_ip_1 = gfn_obj.get_rhs_ip(ps)
     rhs_ea_1 = gfn_obj.get_rhs_ea(qs)
-    print("Time for get_rhs_ip and get_rhs_ea: %6.4e" % (time.time() - time0))
 
     try:
-        import fcdmft.solver.ccgf
-
-        time0 = time.time()
-        rhs_ip_2 = [greens_b_vector_ip_rhf(cc_obj, p, vec0) for p in ps]
-        rhs_ea_2 = [greens_b_vector_ea_rhf(cc_obj, q, vec0) for q in qs]
+        from fcdmft.solver.ccgf import greens_b_vector_ip_rhf, greens_b_vector_ea_rhf
+        rhs_ip_2 = [greens_b_vector_ip_rhf(cc_obj, p) for p in ps]
+        rhs_ea_2 = [greens_b_vector_ea_rhf(cc_obj, q) for q in qs]
         rhs_ip_2 = numpy.array(rhs_ip_2)
         rhs_ea_2 = numpy.array(rhs_ea_2)
-        print("Time for fcdmft.solver.ccgf: %6.4e" % (time.time() - time0))
 
-        err1 = numpy.linalg.norm(rhs_ip_1 - rhs_ip_2) / rhs_ip_1.size
-        err2 = numpy.linalg.norm(rhs_ea_1 - rhs_ea_2) / rhs_ea_1.size
+        err1 = numpy.linalg.norm(rhs_ip_1 - rhs_ip_2)
+        err2 = numpy.linalg.norm(rhs_ea_1 - rhs_ea_2)
 
         # Not as small as I expected
-        assert err1 < 1e-6
-        assert err2 < 1e-6
+        assert err1 < 1e-6, err1
+        assert err2 < 1e-6, err2
 
     except ImportError:
         pass
