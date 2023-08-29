@@ -52,6 +52,9 @@ class GreensFunctionMixin(lib.StreamObject):
     coeff = None
 
     nelec0 = None
+    _nelec_ip = None
+    _nelec_ea = None
+
     ene0 = None
     vec0 = None
     amp0 = None
@@ -259,7 +262,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         nelec0 = self.nelec0
         vec0 = self.vec0
 
-        rhs_ea = numpy.asarray([fci.addons.cre_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
+        rhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         rhs_ea = rhs_ea.reshape(len(orb_list), -1)
 
         return rhs_ea
@@ -271,7 +274,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         nelec0 = self.nelec0
         vec0 = self.vec0
 
-        lhs_ea = numpy.asarray([fci.addons.cre_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
+        lhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         lhs_ea = lhs_ea.reshape(len(orb_list), -1)
 
         return lhs_ea
@@ -437,37 +440,30 @@ if __name__ == '__main__':
     fci_obj = fci.FCI(rhf_obj)
     ene_fci, vec_fci = fci_obj.kernel()
 
+    print("ene_fci = %12.8f" % ene_fci)
+
     eta = 0.01
     omega_list = numpy.linspace(-0.5, 0.5, 21)
     coeff = rhf_obj.mo_coeff
     nao, nmo = coeff.shape
-    ps = [0, 1]
-    qs = [0, 1, 2, 3]
+    ps = [p for p in range(nmo)]
+    qs = [q for q in range(nmo)]
 
     gfn_obj = FCIGF(m, coeff=coeff, method="direct")
+    gfn_obj.conv_tol = 1e-8
     gfn1 = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
-    gen_hv0_ip_1, gen_hd0_ip = gfn_obj.gen_hop_ip()
-    gen_hv0_ea_1, gen_hd0_ea = gfn_obj.gen_hop_ea()
 
     gfn_obj = FCIGF(m, coeff=coeff, method="slow")
+    gfn_obj.conv_tol = 1e-8
     gfn2 = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
-    gen_hv0_ip_2, _ = gfn_obj.gen_hop_ip()
-    gen_hv0_ea_2, _ = gfn_obj.gen_hop_ea()
 
-    assert numpy.linalg.norm(gfn1 - gfn2) < 1e-4
+    assert numpy.linalg.norm(gfn1 - gfn2) < 1e-6
 
-    for omega in omega_list:
-        vec_hd0_ip = gen_hd0_ip(omega, eta)
-        vec_hd0_ea = gen_hd0_ea(omega, eta)
-
-        hv0_ip_1 = numpy.asarray([gen_hv0_ip_1(omega, eta)(x) for x in numpy.eye(vec_hd0_ip.size)])
-        hv0_ea_1 = numpy.asarray([gen_hv0_ea_1(omega, eta)(x) for x in numpy.eye(vec_hd0_ea.size)])
-
-        hv0_ip_2 = gen_hv0_ip_2(omega, eta)
-        hv0_ea_2 = gen_hv0_ea_2(omega, eta)
-
-        err1 = numpy.linalg.norm(hv0_ip_1 - hv0_ip_2)
-        err2 = numpy.linalg.norm(hv0_ea_1 - hv0_ea_2)
-
-        assert err1 < 1e-10
-        assert err2 < 1e-10
+    try:
+        import fcdmft.solver.fcigf
+        gfn3 = fcdmft.solver.fcigf.FCIGF(fci_obj, rhf_obj, tol=1e-8)
+        gfn3 = gfn3.ipfci_mo(ps, qs, omega_list, eta) + gfn3.eafci_mo(ps, qs, omega_list, eta)
+        gfn3 = gfn3.transpose(2, 0, 1)
+        assert numpy.linalg.norm(gfn1 - gfn3) < 1e-6
+    except ImportError:
+        pass
