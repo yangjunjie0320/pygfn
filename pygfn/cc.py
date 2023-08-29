@@ -122,17 +122,23 @@ class CoupledClusterSingleDoubleSpin0Slow(GreensFunctionMixin):
         nocc = self._base.nocc
         nvir = norb - nocc
         t1, t2 = self.amp0
-        def gen_rhs(p):
-            if p < nocc:
-                rhs_ip_1 = numpy.zeros((nocc,))
-                rhs_ip_2 = numpy.zeros((nocc, nocc, nvir))
-                rhs_ip_1[p] = 1.0
-            else:
-                rhs_ip_1 = t1[:, p-nocc]
-                rhs_ip_2 = t2[:, :, p-nocc, :]
+
+        def gen_rhs_occ(i):
+            rhs_ip_1 = numpy.zeros((nocc,))
+            rhs_ip_2 = numpy.zeros((nocc, nocc, nvir))
+            rhs_ip_1[i] = 1.0
             return amplitudes_to_vector_ip(rhs_ip_1, rhs_ip_2)
 
-        rhs_ip = numpy.array([gen_rhs(p) for p in orb_list])
+        def gen_rhs_vir(a):
+            rhs_ip_1 = t1[:, a-nocc]
+            rhs_ip_2 = t2[:, :, a-nocc, :]
+            return amplitudes_to_vector_ip(rhs_ip_1, rhs_ip_2)
+
+        mask_occ = orb_list < nocc
+        mask_vir = ~mask_occ
+        rhs_ip_occ = [gen_rhs_occ(i) for i in orb_list[mask_occ]]
+        rhs_ip_vir = [gen_rhs_vir(a) for a in orb_list[mask_vir]]
+        rhs_ip = numpy.array(rhs_ip_occ + rhs_ip_vir)
         return rhs_ip
 
     def get_lhs_ip(self, orb_list=None, verbose=None):
