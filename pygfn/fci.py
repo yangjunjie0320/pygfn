@@ -191,8 +191,7 @@ class GreensFunctionMixin(lib.StreamObject):
         gfn_ip = self.solve_gfn_ip(omegas, ps=ps, qs=qs, eta=eta, verbose=verbose)
         gfn_ea = self.solve_gfn_ea(omegas, ps=ps, qs=qs, eta=eta, verbose=verbose)
 
-        gfn = gfn_ip + gfn_ea
-        return gfn
+        return (gfn_ip, gfn_ea)
 
 class FullConfigurationInteractionSlow(GreensFunctionMixin):
     def __init__(self, hf_obj):
@@ -447,20 +446,24 @@ if __name__ == '__main__':
 
     gfn_obj = FCIGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
-    gfn1 = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
+    gfn1_ip, gfn1_ea = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
 
     gfn_obj = FCIGF(rhf_obj, method="slow")
     gfn_obj.conv_tol = 1e-8
-    gfn2 = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
+    gfn2_ip, gfn2_ea = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
 
-    assert numpy.linalg.norm(gfn1 - gfn2) < 1e-6
+    assert numpy.linalg.norm(gfn1_ip - gfn2_ip) < 1e-6
+    assert numpy.linalg.norm(gfn1_ea - gfn2_ea) < 1e-6
 
     try:
         import fcdmft.solver.fcigf
         gfn_obj = fcdmft.solver.fcigf.FCIGF(fci_obj, rhf_obj, tol=1e-8)
-        gfn3    = gfn_obj.ipfci_mo(ps, qs, omega_list, eta)
-        gfn3   += gfn_obj.eafci_mo(ps, qs, omega_list, eta)
-        gfn3    = gfn3.transpose(2, 0, 1)
-        assert numpy.linalg.norm(gfn1 - gfn3) < 1e-6
+        gfn3_ip = gfn_obj.ipfci_mo(ps, qs, omega_list, eta).transpose(2, 0, 1)
+        gfn3_ea = gfn_obj.eafci_mo(ps, qs, omega_list, eta).transpose(2, 0, 1)
+        assert numpy.linalg.norm(gfn1_ip - gfn3_ip) < 1e-6
+        assert numpy.linalg.norm(gfn1_ea - gfn3_ea) < 1e-6
+
+        print("All tests passed!")
+
     except ImportError:
         pass
