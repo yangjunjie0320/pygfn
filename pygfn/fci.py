@@ -182,10 +182,8 @@ class GreensFunctionMixin(lib.StreamObject):
         assert res.shape == (len(omegas), np, nq)
         return res
 
-    def kernel(self, omegas, eta=1e-2, ps=None, qs=None, coeff=None, vec0=None, verbose=None):
-        coeff = coeff if coeff is not None else self.coeff
-        assert coeff is not None
-        self.build(coeff=coeff, vec0=vec0)
+    def kernel(self, omegas, eta=1e-2, ps=None, qs=None, vec0=None, verbose=None):
+        self.build(vec0=vec0)
 
         assert self.ene0 is not None
         assert self.vec0 is not None
@@ -196,14 +194,15 @@ class GreensFunctionMixin(lib.StreamObject):
         gfn = gfn_ip + gfn_ea
         return gfn
 
-
 class FullConfigurationInteractionSlow(GreensFunctionMixin):
-    def __init__(self, mol_or_mf_obj, coeff=None):
-        self._base = fci.FCI(mol_or_mf_obj, mo=coeff)
-        self.coeff = coeff
+    def __init__(self, hf_obj):
+        self._base = fci.FCI(hf_obj, mo=None)
+        self._base.mf = hf_obj
 
-    def build(self, coeff=None, vec0=None):
+    def build(self, vec0=None):
+        coeff = self._base.mf.mo_coeff
         assert coeff is not None
+
         self._base = fci.FCI(self._base.mol, mo=coeff)
         ene0, vec0 = self._base.kernel(ci0=vec0)
 
@@ -414,12 +413,12 @@ class FullConfigurationInteractionDirectSpin1(FullConfigurationInteractionSlow):
         return gen_hv0, gen_hd0
 
 
-def FCIGF(mol_or_mf_obj, coeff=None, method="slow"):
+def FCIGF(hf_obj, method="slow"):
     if method.lower() == "slow":
-        return FullConfigurationInteractionSlow(mol_or_mf_obj, coeff=coeff)
+        return FullConfigurationInteractionSlow(hf_obj)
 
     elif method.lower() == "direct":
-        return FullConfigurationInteractionDirectSpin1(mol_or_mf_obj, coeff=coeff)
+        return FullConfigurationInteractionDirectSpin1(hf_obj)
 
     else:
         raise NotImplementedError
@@ -440,20 +439,17 @@ if __name__ == '__main__':
     fci_obj = fci.FCI(rhf_obj)
     ene_fci, vec_fci = fci_obj.kernel()
 
-    print("ene_fci = %12.8f" % ene_fci)
-
     eta = 0.01
     omega_list = numpy.linspace(-0.5, 0.5, 21)
-    coeff = rhf_obj.mo_coeff
-    nao, nmo = coeff.shape
+    nao, nmo = rhf_obj.mo_coeff.shape
     ps = [p for p in range(nmo)]
     qs = [q for q in range(nmo)]
 
-    gfn_obj = FCIGF(m, coeff=coeff, method="direct")
+    gfn_obj = FCIGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
     gfn1 = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
 
-    gfn_obj = FCIGF(m, coeff=coeff, method="slow")
+    gfn_obj = FCIGF(rhf_obj, method="slow")
     gfn_obj.conv_tol = 1e-8
     gfn2 = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
 
@@ -461,9 +457,10 @@ if __name__ == '__main__':
 
     try:
         import fcdmft.solver.fcigf
-        gfn3 = fcdmft.solver.fcigf.FCIGF(fci_obj, rhf_obj, tol=1e-8)
-        gfn3 = gfn3.ipfci_mo(ps, qs, omega_list, eta) + gfn3.eafci_mo(ps, qs, omega_list, eta)
-        gfn3 = gfn3.transpose(2, 0, 1)
+        gfn_obj = fcdmft.solver.fcigf.FCIGF(fci_obj, rhf_obj, tol=1e-8)
+        gfn3    = gfn_obj.ipfci_mo(ps, qs, omega_list, eta)
+        gfn3   += gfn_obj.eafci_mo(ps, qs, omega_list, eta)
+        gfn3    = gfn3.transpose(2, 0, 1)
         assert numpy.linalg.norm(gfn1 - gfn3) < 1e-6
     except ImportError:
         pass
