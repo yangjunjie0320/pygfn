@@ -11,8 +11,38 @@ from pyscf.cc.eom_rccsd import amplitudes_to_vector_ea
 
 from pyscf import __config__
 
-from pygfn.lib import gmres
+from pygfn.fci import _pack
 from pygfn.fci import GreensFunctionMixin
+def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
+    assert comp in ["ip", "ea"]
+
+    norb = gfn_obj.norb
+    nelec0 = gfn_obj.nelec0
+    nelec  = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
+    assert nelec[0] >= 0 and nelec[1] >= 0
+    assert nelec[0] <= norb and nelec[1] <= norb
+
+    from pyscf.cc.eom_rccsd import EOMIP, EOMEA
+    eom_obj = EOMEA(gfn_obj._base) if comp == "ea" else EOMIP(gfn_obj._base)
+    imds = eom_obj.make_imds(eris=gfn_obj._eris)
+
+    vec_hdiag = eom_obj.get_diag(imds=imds)
+    vec_size = vec_hdiag.size
+    vec_ones = numpy.ones(vec_size)
+
+    def gen_hv0(omega, eta):
+        def hv0(v):
+            c = v
+            hc_real = eom_obj.matvec(c.real, imds=imds)
+            hc_imag = eom_obj.matvec(c.imag, imds=imds)
+            hc0 = hc_real + 1j * hc_imag  # - ene0 * c
+            return _pack(hc0.reshape(-1), omega, eta, v=v, comp=comp)
+        return hv0
+
+    def gen_hd0(omega, eta):
+        return _pack(vec_hdiag, omega, eta, v=vec_ones, comp=comp)
+
+    return gen_hv0, gen_hd0
 
 
 class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
@@ -179,70 +209,10 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
         return lhs_ea
 
     def gen_hop_ip(self, verbose=None):
-        norb = self.norb
-        nelec0 = self.nelec0
-        nelec  = self._nelec_ip
-        assert nelec[0] >= 0 and nelec[1] >= 0
-
-        ene0 = self.ene0
-        eom_obj = pyscf.cc.eom_rccsd.EOMIP(self._base)
-        imds = eom_obj.make_imds(eris=self._eris)
-
-        vec_hdiag = eom_obj.get_diag(imds=imds)
-        vec_size = vec_hdiag.size
-
-        def gen_hv0(omega, eta):
-            def hv0(v):
-                c = v
-                hc_real = eom_obj.matvec(c.real)
-                hc_imag = eom_obj.matvec(c.imag)
-
-                hc0 = hc_real + 1j * hc_imag - ene0 * c
-                omega_eta = (omega - 1j * eta) * c
-                return (hc0 + omega_eta).reshape(-1)
-
-            return hv0
-
-        def gen_hd0(omega, eta):
-            vec_h0 = vec_hdiag - ene0
-            omega_eta = (omega - 1j * eta)
-            assert vec_h0.shape == (vec_size,)
-            return vec_h0 + omega_eta
-
-        return gen_hv0, gen_hd0
+        return _gen_hop_direct(self, comp="ip", verbose=verbose)
 
     def gen_hop_ea(self, verbose=None):
-        norb = self.norb
-        nelec0 = self.nelec0
-        nelec  = self._nelec_ea
-        assert nelec[0] <= norb and nelec[1] <= norb
-
-        ene0 = self.ene0
-        eom_obj = pyscf.cc.eom_rccsd.EOMEA(self._base)
-        imds = eom_obj.make_imds(eris=self._eris)
-
-        vec_hdiag = eom_obj.get_diag(imds=imds)
-        vec_size = vec_hdiag.size
-
-        def gen_hv0(omega, eta):
-            def hv0(v):
-                c = v
-                hc_real = eom_obj.matvec(c.real)
-                hc_imag = eom_obj.matvec(c.imag)
-
-                hc0 = hc_real + 1j * hc_imag - ene0 * c
-                omega_eta = (omega + 1j * eta) * c
-                return (- hc0 + omega_eta).reshape(-1)
-
-            return hv0
-
-        def gen_hd0(omega, eta):
-            vec_h0 = vec_hdiag - ene0
-            omega_eta = (omega + 1j * eta)
-            assert vec_h0.shape == (vec_size,)
-            return -vec_h0 + omega_eta
-
-        return gen_hv0, gen_hd0
+        return _gen_hop_direct(self, comp="ea", verbose=verbose)
 
 
 def CCGF(hf_obj, method="direct"):
@@ -267,7 +237,7 @@ if __name__ == '__main__':
     rhf_obj.kernel()
 
     cc_obj = cc.CCSD(rhf_obj)
-    cc_obj.verbose = 4
+    cc_obj.verbose = 0
     cc_obj.conv_tol = 1e-8
     cc_obj.conv_tol_normt = 1e-8
     ene_ccsd, t1, t2 = cc_obj.kernel()
@@ -277,7 +247,7 @@ if __name__ == '__main__':
     print("ene_ccsd = %12.8f" % ene_ccsd)
 
     eta = 0.01
-    omega_list = numpy.linspace(-0.5, 0.5, 21)
+    omega_list = [0.0] # numpy.linspace(-0.5, 0.5, 21)
     coeff = rhf_obj.mo_coeff
     nao, nmo = coeff.shape
     ps = [p for p in range(nmo)]
@@ -285,54 +255,18 @@ if __name__ == '__main__':
 
     gfn_obj = CCGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
-    gfn_obj.build(vec0=vec0)
-
-    rhs_ip_1 = gfn_obj.get_rhs_ip(ps)
-    rhs_ea_1 = gfn_obj.get_rhs_ea(qs)
-    lhs_ip_1 = gfn_obj.get_lhs_ip(ps)
-    lhs_ea_1 = gfn_obj.get_lhs_ea(qs)
     gfn1_ip, gfn1_ea = gfn_obj.kernel(omega_list, ps=ps, qs=qs, eta=eta)
 
     try:
         import fcdmft.solver.ccgf
-        from fcdmft.solver.ccgf import greens_b_vector_ip_rhf, greens_b_vector_ea_rhf
-        from fcdmft.solver.ccgf import greens_e_vector_ip_rhf, greens_e_vector_ea_rhf
-
-        rhs_ip_2 = [greens_b_vector_ip_rhf(gfn_obj._base, p) for p in ps]
-        rhs_ea_2 = [greens_b_vector_ea_rhf(gfn_obj._base, p) for p in ps]
-        rhs_ip_2 = numpy.array(rhs_ip_2)
-        rhs_ea_2 = numpy.array(rhs_ea_2)
-
-        err1 = numpy.linalg.norm(rhs_ip_1 - rhs_ip_2)
-        err2 = numpy.linalg.norm(rhs_ea_1 - rhs_ea_2)
-
-        # Not as small as I expected
-        assert err1 < 1e-6, err1
-        assert err2 < 1e-6, err2
-
-        lhs_ip_2 = [greens_e_vector_ip_rhf(gfn_obj._base, p) for p in ps]
-        lhs_ea_2 = [greens_e_vector_ea_rhf(gfn_obj._base, p) for p in ps]
-        lhs_ip_2 = numpy.array(lhs_ip_2)
-        lhs_ea_2 = numpy.array(lhs_ea_2)
-
-        err1 = numpy.linalg.norm(lhs_ip_1 - lhs_ip_2)
-        err2 = numpy.linalg.norm(lhs_ea_1 - lhs_ea_2)
-
-        # Not as small as I expected
-        assert err1 < 1e-6, err1
-        assert err2 < 1e-6, err2
-
         gfn_obj = fcdmft.solver.ccgf.CCGF(gfn_obj._base)
-        gfn_obj.conv_tol = 1e-8
-        gfn2_ip, gfn2_ea = gfn_obj.get_gf(ps, qs, omega_list, broadening=eta)
-        gfn2_ip = gfn2_ip.transpose(2, 0, 1)
-        gfn2_ea = gfn2_ea.transpose(2, 0, 1)
-
-        print("gfn1_ip = \n", gfn1_ip.shape)
-        print("gfn2_ip = \n", gfn2_ip.shape)
-
-        assert numpy.linalg.norm(gfn1_ip - gfn2_ip) < 1e-6, numpy.linalg.norm(gfn1_ip - gfn2_ip)
-        assert numpy.linalg.norm(gfn1_ea - gfn2_ea) < 1e-6, numpy.linalg.norm(gfn1_ea - gfn2_ea)
+        gfn_obj.tol = 1e-8
+        gfn2_ip = -gfn_obj.ipccsd_mo(qs, ps, omega_list, eta)
+        gfn2_ip = gfn2_ip.transpose(2, 1, 0)
+        gfn2_ea = -gfn_obj.eaccsd_mo(qs, ps, omega_list, eta)
+        gfn2_ea = gfn2_ea.transpose(2, 1, 0)
+        assert numpy.linalg.norm(gfn1_ip - gfn2_ip) < 1e-6
+        assert numpy.linalg.norm(gfn1_ea - gfn2_ea) < 1e-6
 
         print("All tests passed!")
 

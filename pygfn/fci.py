@@ -23,6 +23,77 @@ def _unpack_pq(ps, qs, norb):
 
     return ps, qs, np, nq
 
+def _pack(h, omega, eta, v=None, comp="ip"):
+    assert h.shape == v.shape
+    pm = 1.0 if comp == "ip" else -1.0
+    omega_eta = (omega - pm * eta * 1.0j)
+    return pm * h + omega_eta * v
+
+def _gen_hop_slow(gfn_obj, comp="ip", verbose=None):
+    norb = gfn_obj.norb
+    nelec0 = gfn_obj.nelec0
+    nelec  = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
+
+    h1e = gfn_obj._h1e
+    eri = gfn_obj._eri
+    ene0 = gfn_obj.ene0
+
+    vec_hdiag = gfn_obj._base.make_hdiag(h1e, eri, norb, nelec)
+    na = fci.cistring.num_strings(norb, nelec[0])
+    nb = fci.cistring.num_strings(norb, nelec[1])
+
+    vec_size = vec_hdiag.size
+    assert na * nb == vec_size
+
+    hm = fci.direct_spin1.pspace(h1e, eri, norb, nelec, hdiag=vec_hdiag, np=vec_size)[1]
+    im = numpy.eye(vec_size)
+    assert hm.shape == (vec_size, vec_size)
+
+    if vec_size * vec_size * 8 / 1024 ** 3 > gfn_obj.max_memory:
+        raise ValueError("Not enough memory for FCI Hamiltonian.")
+
+    def hv0(omega, eta):
+        hm0 = hm - ene0 * im
+        return _pack(hm0, omega, eta, v=im, comp=comp)
+
+    return hv0, None
+
+def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
+    assert comp in ["ip", "ea"]
+
+    norb = gfn_obj.norb
+    nelec0 = gfn_obj.nelec0
+    nelec = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
+    assert nelec[0] >= 0 and nelec[1] >= 0
+    assert nelec[0] <= norb and nelec[1] <= norb
+
+    h1e = gfn_obj._h1e
+    eri = gfn_obj._eri
+    ene0 = gfn_obj.ene0
+
+    vec_hdiag = gfn_obj._base.make_hdiag(h1e, eri, norb, nelec)
+    vec_size = vec_hdiag.size
+    vec_ones = numpy.ones(vec_size)
+
+    na = fci.cistring.num_strings(norb, nelec[0])
+    nb = fci.cistring.num_strings(norb, nelec[1])
+    assert na * nb == vec_size
+
+    h2e = gfn_obj._base.absorb_h1e(h1e, eri, norb, nelec, .5)
+
+    def gen_hv0(omega, eta):
+        def hv0(v):
+            c = v.reshape(na, nb)
+            hc_real = contract_2e(h2e, c.real, norb, nelec)
+            hc_imag = contract_2e(h2e, c.imag, norb, nelec)
+            hc0 = hc_real + 1j * hc_imag - ene0 * c
+            return _pack(hc0.reshape(-1), omega, eta, v=v, comp=comp)
+        return hv0
+
+    def gen_hd0(omega, eta):
+        return _pack(vec_hdiag - ene0, omega, eta, v=vec_ones, comp=comp)
+
+    return gen_hv0, gen_hd0
 
 class GreensFunctionMixin(lib.StreamObject):
     """
@@ -94,16 +165,6 @@ class GreensFunctionMixin(lib.StreamObject):
     def solve_gfn(self, omegas, ps=None, qs=None, eta=0.01, comp="ip", verbose=None):
         r"""Solves Green's function in the frequency domain, represented by the following mathematical expressions:
 
-            .. math::
-                G^{\mathrm{IP}}_{pq}(\omega) = \langle L | a^{\dagger}_q \left[\omega+(H - E_0)+\mathrm{i} \eta\right]^{-1} a_p |R\rangle
-
-            .. math::
-                G^{\mathrm{EA}}_{pq}(\omega) = \langle L | a_p \left[\omega-(H - E_0)+\mathrm{i} \eta\right]^{-1} a^{\dagger}_q |R\rangle
-
-            .. math::
-                G_{pq}(\omega) = G^{\mathrm{IP}}_{pq}(\omega) + G^{\mathrm{EA}}_{pq}(\omega)
-                               =  X_{\mu p} (\omega) L_{\mu q} +  Y_{\nu q} (\omega) L_{\nu p}
-
             Parameters:
             ----------
             omega : list of float
@@ -151,7 +212,7 @@ class GreensFunctionMixin(lib.StreamObject):
         assert vec_rhs.shape[1] == vec_size
         assert vec_lhs.shape[1] == vec_size
 
-        if gen_hd0 is None:
+        if gen_hd0 is None: # Slow: build the full Hamiltonian matrix
             def gen_gfn(omega):
                 hv0 = gen_hv0(omega, eta)
                 vec_x = numpy.linalg.solve(hv0, vec_rhs.T)
@@ -161,7 +222,7 @@ class GreensFunctionMixin(lib.StreamObject):
                 assert gfn.shape == (np, nq)
                 return gfn
 
-        else:
+        else: # Direct: use GMRES to solve the linear equations
             def gen_gfn(omega):
                 hv0 = gen_hv0(omega, eta)
                 hd0 = gen_hd0(omega, eta)
@@ -171,11 +232,14 @@ class GreensFunctionMixin(lib.StreamObject):
                     tol=self.conv_tol, max_cycle=self.max_cycle,
                     m=self.gmres_m, verbose=log
                 )
-                vec_x = vec_x.T
-                gfn = numpy.dot(vec_lhs, vec_x)
+                vec_x = vec_x.reshape(*vec_rhs.shape)
 
-                gfn = gfn if comp == "ip" else gfn.T
-                assert gfn.shape == (np, nq)
+                gfn = numpy.einsum("iI,jI -> ij", vec_lhs, vec_x)
+                if comp == "ip":
+                    assert gfn.shape == (np, nq)
+                else:
+                    assert gfn.shape == (nq, np)
+                    gfn = gfn.T
                 return gfn
 
         res = numpy.array([gen_gfn(omega) for omega in omegas])
@@ -278,139 +342,17 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         return lhs_ea
 
     def gen_hop_ip(self, verbose=None):
-        norb = self.norb
-        nelec0 = self.nelec0
-        nelec  = self._nelec_ip
-        assert nelec[0] >= 0 and nelec[1] >= 0
-
-        h1e = self._h1e
-        eri = self._eri
-        ene0 = self.ene0
-
-        vec_hdiag = self._base.make_hdiag(h1e, eri, norb, nelec)
-        vec_size = vec_hdiag.size
-
-        hm = fci.direct_spin1.pspace(h1e, eri, norb, nelec, hdiag=vec_hdiag, np=vec_size)[1]
-        assert hm.shape == (vec_size, vec_size)
-
-        if vec_size * vec_size * 8 / 1024 ** 3 > self.max_memory:
-            raise ValueError("Not enough memory for FCI Hamiltonian.")
-
-        def hv0(omega, eta):
-            hm0 = hm - ene0 * numpy.eye(vec_size)
-            omega_eta = (omega - 1j * eta) * numpy.eye(vec_size)
-            assert hm0.shape == (vec_size, vec_size)
-            return hm0 + omega_eta
-
-        return hv0, None
+        return _gen_hop_slow(self, comp="ip", verbose=verbose)
 
     def gen_hop_ea(self, verbose=None):
-        norb = self.norb
-        nelec0 = self.nelec0
-        nelec  = self._nelec_ea
-        assert nelec[0] <= norb and nelec[1] <= norb
-
-        h1e = self._h1e
-        eri = self._eri
-        ene0 = self.ene0
-
-        vec_hdiag = self._base.make_hdiag(h1e, eri, norb, nelec)
-        vec_size = vec_hdiag.size
-
-        hm = fci.direct_spin1.pspace(h1e, eri, norb, nelec, hdiag=vec_hdiag, np=vec_size)[1]
-        assert hm.shape == (vec_size, vec_size)
-
-        if vec_size * vec_size * 8 / 1024 ** 3 > self.max_memory:
-            raise ValueError("Not enough memory for FCI Hamiltonian.")
-
-        def gen_hv0(omega, eta):
-            hm0 = hm - ene0 * numpy.eye(vec_size)
-            omega_eta = (omega + 1j * eta) * numpy.eye(vec_size)
-            assert hm0.shape == (vec_size, vec_size)
-            return - hm0 + omega_eta
-
-        return gen_hv0, None
-
+        return _gen_hop_slow(self, comp="ea", verbose=verbose)
 
 class FullConfigurationInteractionDirectSpin1(FullConfigurationInteractionSlow):
     def gen_hop_ip(self, verbose=None):
-        norb = self.norb
-        nelec0 = self.nelec0
-        nelec  = self._nelec_ip
-        assert nelec[0] >= 0 and nelec[1] >= 0
-
-        h1e = self._h1e
-        eri = self._eri
-        ene0 = self.ene0
-
-        vec_hdiag = self._base.make_hdiag(h1e, eri, norb, nelec)
-        na = fci.cistring.num_strings(norb, nelec[0])
-        nb = fci.cistring.num_strings(norb, nelec[1])
-
-        vec_size = vec_hdiag.size
-        assert na * nb == vec_size
-
-        h2e = self._base.absorb_h1e(h1e, eri, norb, nelec, .5)
-
-        def gen_hv0(omega, eta):
-            def hv0(v):
-                c = v.reshape(na, nb)
-                hc_real = contract_2e(h2e, c.real, norb, nelec)
-                hc_imag = contract_2e(h2e, c.imag, norb, nelec)
-
-                hc0 = hc_real + 1j * hc_imag - ene0 * c
-                omega_eta = (omega - 1j * eta) * c
-                return (hc0 + omega_eta).reshape(-1)
-
-            return hv0
-
-        def gen_hd0(omega, eta):
-            vec_h0 = vec_hdiag - ene0
-            omega_eta = (omega - 1j * eta)
-            assert vec_h0.shape == (vec_size,)
-            return vec_h0 + omega_eta
-
-        return gen_hv0, gen_hd0
+        return _gen_hop_direct(self, comp="ip", verbose=verbose)
 
     def gen_hop_ea(self, verbose=None):
-        norb = self.norb
-        nelec0 = self.nelec0
-        nelec  = self._nelec_ea
-        assert nelec[0] <= norb and nelec[1] <= norb
-
-        h1e = self._h1e
-        eri = self._eri
-        ene0 = self.ene0
-
-        vec_hdiag = self._base.make_hdiag(h1e, eri, norb, nelec)
-        na = fci.cistring.num_strings(norb, nelec[0])
-        nb = fci.cistring.num_strings(norb, nelec[1])
-
-        vec_size = vec_hdiag.size
-        assert na * nb == vec_size
-
-        h2e = self._base.absorb_h1e(h1e, eri, norb, nelec, .5)
-
-        def gen_hv0(omega, eta):
-            def hv0(v):
-                c = v.reshape(na, nb)
-                hc_real = contract_2e(h2e, c.real, norb, nelec)
-                hc_imag = contract_2e(h2e, c.imag, norb, nelec)
-
-                hc0 = hc_real + 1j * hc_imag - ene0 * c
-                omega_eta = (omega + 1j * eta) * c
-                return (- hc0 + omega_eta).reshape(-1)
-
-            return hv0
-
-        def gen_hd0(omega, eta):
-            vec_h0 = vec_hdiag - ene0
-            omega_eta = (omega + 1j * eta)
-            assert vec_h0.shape == (vec_size,)
-            return -vec_h0 + omega_eta
-
-        return gen_hv0, gen_hd0
-
+        return _gen_hop_direct(self, comp="ea", verbose=verbose)
 
 def FCIGF(hf_obj, method="slow"):
     if method.lower() == "slow":
@@ -421,7 +363,6 @@ def FCIGF(hf_obj, method="slow"):
 
     else:
         raise NotImplementedError
-
 
 if __name__ == '__main__':
     from pyscf import gto, scf
@@ -441,7 +382,7 @@ if __name__ == '__main__':
     eta = 0.01
     omega_list = numpy.linspace(-0.5, 0.5, 21)
     nao, nmo = rhf_obj.mo_coeff.shape
-    ps = [p for p in range(nmo)]
+    ps = [p for p in range(nmo)][0:4]
     qs = [q for q in range(nmo)]
 
     gfn_obj = FCIGF(rhf_obj, method="direct")
@@ -462,7 +403,6 @@ if __name__ == '__main__':
         gfn3_ea = gfn_obj.eafci_mo(ps, qs, omega_list, eta).transpose(2, 0, 1)
         assert numpy.linalg.norm(gfn1_ip - gfn3_ip) < 1e-6
         assert numpy.linalg.norm(gfn1_ea - gfn3_ea) < 1e-6
-
         print("All tests passed!")
 
     except ImportError:
