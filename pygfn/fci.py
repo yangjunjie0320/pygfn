@@ -247,7 +247,8 @@ class GreensFunctionMixin(lib.StreamObject):
         return res
 
     def kernel(self, omegas, eta=1e-2, ps=None, qs=None, vec0=None, verbose=None):
-        self.build(vec0=vec0)
+        if self.ene0 is None or self.vec0 is None:
+            self.build(vec0=vec0)
 
         assert self.ene0 is not None
         assert self.vec0 is not None
@@ -263,10 +264,12 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         self._base.mf = hf_obj
 
     def build(self, vec0=None):
+        mf = self._base.mf
         coeff = self._base.mf.mo_coeff
         assert coeff is not None
 
         self._base = fci.FCI(self._base.mol, mo=coeff)
+        self._base.mf = mf
         ene0, vec0 = self._base.kernel(ci0=vec0)
 
         nelec0 = self._base.nelec
@@ -382,12 +385,18 @@ if __name__ == '__main__':
     eta = 0.01
     omega_list = numpy.linspace(-0.5, 0.5, 21)
     nao, nmo = rhf_obj.mo_coeff.shape
-    ps = [p for p in range(nmo)][0:4]
+    ps = [0, 1]
     qs = [q for q in range(nmo)]
 
     gfn_obj = FCIGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
+    gfn_obj.build(vec0=vec_fci)
+
+    import time
+    time0 = time.time()
     gfn1_ip, gfn1_ea = gfn_obj.kernel(omega_list, eta=eta, ps=ps, qs=qs)
+    time1 = time.time()
+    print("time = %12.8f" % (time1 - time0))
 
     gfn_obj = FCIGF(rhf_obj, method="slow")
     gfn_obj.conv_tol = 1e-8
@@ -399,10 +408,16 @@ if __name__ == '__main__':
     try:
         import fcdmft.solver.fcigf
         gfn_obj = fcdmft.solver.fcigf.FCIGF(fci_obj, rhf_obj, tol=1e-8)
+
+        import time
+        time0 = time.time()
         gfn3_ip = gfn_obj.ipfci_mo(ps, qs, omega_list, eta).transpose(2, 0, 1)
         gfn3_ea = gfn_obj.eafci_mo(ps, qs, omega_list, eta).transpose(2, 0, 1)
         assert numpy.linalg.norm(gfn1_ip - gfn3_ip) < 1e-6
         assert numpy.linalg.norm(gfn1_ea - gfn3_ea) < 1e-6
+        time1 = time.time()
+        print("time = %12.8f" % (time1 - time0))
+
         print("All tests passed!")
 
     except ImportError:

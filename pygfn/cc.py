@@ -214,7 +214,6 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
     def gen_hop_ea(self, verbose=None):
         return _gen_hop_direct(self, comp="ea", verbose=verbose)
 
-
 def CCGF(hf_obj, method="direct"):
     if method.lower() == "direct":
         assert isinstance(hf_obj, pyscf.scf.hf.RHF)
@@ -229,7 +228,7 @@ if __name__ == '__main__':
 
     m = gto.M(
         atom='H 0 0 0; Li 0 0 1.1',
-        basis='sto3g',
+        basis='ccpvdz',
         verbose=0,
     )
     rhf_obj = scf.RHF(m)
@@ -247,26 +246,36 @@ if __name__ == '__main__':
     print("ene_ccsd = %12.8f" % ene_ccsd)
 
     eta = 0.01
-    omega_list = [0.0] # numpy.linspace(-0.5, 0.5, 21)
+    omega_list = numpy.linspace(-0.5, 0.5, 21)
     coeff = rhf_obj.mo_coeff
     nao, nmo = coeff.shape
-    ps = [p for p in range(nmo)]
+    ps = [0, 1]
     qs = [q for q in range(nmo)]
 
     gfn_obj = CCGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
+    gfn_obj.build(vec0=vec0)
+
+    import time
+    time0 = time.time()
     gfn1_ip, gfn1_ea = gfn_obj.kernel(omega_list, ps=ps, qs=qs, eta=eta)
+    time1 = time.time()
+    print("time = %12.8f" % (time1 - time0))
 
     try:
         import fcdmft.solver.ccgf
         gfn_obj = fcdmft.solver.ccgf.CCGF(gfn_obj._base)
         gfn_obj.tol = 1e-8
+
+        time0 = time.time()
         gfn2_ip = -gfn_obj.ipccsd_mo(qs, ps, omega_list, eta)
         gfn2_ip = gfn2_ip.transpose(2, 1, 0)
         gfn2_ea = -gfn_obj.eaccsd_mo(qs, ps, omega_list, eta)
         gfn2_ea = gfn2_ea.transpose(2, 1, 0)
         assert numpy.linalg.norm(gfn1_ip - gfn2_ip) < 1e-6
         assert numpy.linalg.norm(gfn1_ea - gfn2_ea) < 1e-6
+        time1 = time.time()
+        print("time = %12.8f" % (time1 - time0))
 
         print("All tests passed!")
 
