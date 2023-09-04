@@ -119,6 +119,7 @@ class GreensFunctionMixin(lib.StreamObject):
     max_cycle = getattr(__config__, 'gf_max_cycle', 50)
     gmres_m = getattr(__config__, 'gf_gmres_m', 30)
 
+    nsite  = None
     norb = None
     coeff = None
 
@@ -259,12 +260,18 @@ class GreensFunctionMixin(lib.StreamObject):
         return (gfn_ip, gfn_ea)
 
 class FullConfigurationInteractionSlow(GreensFunctionMixin):
-    def __init__(self, hf_obj):
+    def __init__(self, hf_obj=None):
+        if hf_obj is None:
+            self._base = fci.FCI(hf_obj, mo=None)
+            self._base.mf = None
+
         self._base = fci.FCI(hf_obj, mo=None)
         self._base.mf = hf_obj
 
     def build(self, vec0=None):
         mf = self._base.mf
+        assert mf is not None, "mf is not given"
+
         coeff = self._base.mf.mo_coeff
         assert coeff is not None
 
@@ -295,6 +302,8 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         self.vec0 = vec0
         self._h1e = h1e
         self._eri = eri
+
+        self.nsite = norb
 
     def get_rhs_ip(self, orb_list=None, verbose=None):
         norb = self.norb

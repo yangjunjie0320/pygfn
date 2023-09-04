@@ -48,9 +48,11 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
 class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
     is_approx_lambda = True
 
-    def __init__(self, hf_obj):
-        self._base: cc.ccsd.RCCSD
-        self._base = cc.CCSD(hf_obj)
+    def __init__(self, hf_obj=None):
+        if hf_obj is None:
+            self._base = None
+
+        self._base : cc.ccsd.RCCSD = cc.CCSD(hf_obj)
         self._base.verbose = 0
 
     def build(self, vec0=None):
