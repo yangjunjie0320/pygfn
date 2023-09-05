@@ -160,8 +160,7 @@ def kernel(h1e, eri, h1e1p, h1p, nsite, nmode, nelec, nph_max,
     e, c = lib.davidson(
         hop, ci0.reshape(-1), precond,
         tol=tol, max_cycle=max_cycle,
-        verbose=verbose,
-        **kwargs
+        verbose=verbose, **kwargs
     )
     return e + h0, c
 
