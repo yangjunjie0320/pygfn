@@ -184,36 +184,40 @@ def kernel(h1e, eri, h1e1p, h1p, nsite, nmode, nelec, nph_max,
 if __name__ == '__main__':
     nsite = 2
     nmode = 2
-    nelec = 2
-    nphonon = 1
-
-    t = numpy.zeros((nsite, nsite))
-    idx = numpy.arange(nsite - 1)
-    t[idx + 1, idx] = t[idx, idx + 1] = -1
+    nph_max = 4
 
     u = 0.0
     g = 0.0
 
-    hpp = numpy.eye(nmode) * 1.1
-    idx = numpy.arange(nmode - 1)
-    hpp[idx + 1, idx] = hpp[idx, idx + 1] = .1
+    h1e = numpy.zeros((nsite, nsite))
+    idx_site = numpy.arange(nsite - 1)
+    h1e[idx_site + 1, idx_site] = h1e[idx_site, idx_site + 1] = -1.0
 
+    idx_site = numpy.arange(nsite)
+    idx_mode = numpy.arange(nmode)
     eri = numpy.zeros((nsite, nsite, nsite, nsite))
-    eri[idx, idx, idx, idx] = u
+    eri[idx_site, idx_site, idx_site, idx_site] = u
+
+    h1e1p = numpy.zeros((nsite, nsite, nmode))
+    h1e1p[idx_site, idx_site, idx_mode] = g
+
+    idx_mode = numpy.arange(nmode - 1)
+    h1p = numpy.eye(nmode) * 1.1
+    h1p[idx_mode + 1, idx_mode] = h1p[idx_mode, idx_mode + 1] = 0.1
 
 
     nelecs = [(ia, ib) for ia in range(nsite + 1) for ib in range(ia + 1)]
     for nelec in nelecs:
-        c = numpy.random.random(make_shape(nsite, nelec, nmode, nphonon))
-        hc1 = fci.direct_ep.contract_1e(t, c, nsite, nelec, nphonon)
-        hc  = contract_h1e((t, t), c, nsite, nelec, nmode, nphonon)
+        c = numpy.random.random(make_shape(nsite, nelec, nmode, nph_max))
+        hc1 = fci.direct_ep.contract_1e(h1e, c, nsite, nelec, nph_max)
+        hc  = contract_h1e((h1e, h1e), c, nsite, nelec, nmode, nph_max)
 
         err = numpy.linalg.norm(hc1 - hc)
         assert err < 1e-10
 
-        hc1 = fci.direct_ep.contract_2e((0.0 * eri, 0.5 * eri, 0.0 * eri), c, nsite, nelec, nphonon)
-        hc2 = fci.direct_ep.contract_2e_hubbard(u, c, nsite, nelec, nphonon)
-        hc  = contract_h2e((0.0 * eri, 0.5 * eri, 0.0 * eri), c, nsite, nelec, nmode, nphonon)
+        hc1 = fci.direct_ep.contract_2e((0.0 * eri, 0.5 * eri, 0.0 * eri), c, nsite, nelec, nph_max)
+        hc2 = fci.direct_ep.contract_2e_hubbard(u, c, nsite, nelec, nph_max)
+        hc  = contract_h2e((0.0 * eri, 0.5 * eri, 0.0 * eri), c, nsite, nelec, nmode, nph_max)
 
         err = numpy.linalg.norm(hc1 - hc)
         assert err < 1e-10
