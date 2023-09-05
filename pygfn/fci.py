@@ -305,48 +305,48 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
 
         self.nsite = norb
 
-    def get_rhs_ip(self, orb_list=None, verbose=None):
+    def get_rhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
         nelec0 = self.nelec0
-        vec0 = self.vec0
+        vec0  = self.vec0 if vec0 is None else vec0
 
         rhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         rhs_ip = rhs_ip.reshape(len(orb_list), -1)
 
         return rhs_ip
 
-    def get_lhs_ip(self, orb_list=None, verbose=None):
+    def get_lhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
         nelec0 = self.nelec0
-        vec0 = self.vec0
+        vec0 = self.vec0 if vec0 is None else vec0
 
         lhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         lhs_ip = lhs_ip.reshape(len(orb_list), -1)
 
         return lhs_ip
 
-    def get_rhs_ea(self, orb_list=None, verbose=None):
+    def get_rhs_ea(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
         nelec0 = self.nelec0
-        vec0 = self.vec0
+        vec0 = self.vec0 if vec0 is None else vec0
 
         rhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         rhs_ea = rhs_ea.reshape(len(orb_list), -1)
 
         return rhs_ea
 
-    def get_lhs_ea(self, orb_list=None, verbose=None):
+    def get_lhs_ea(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
         nelec0 = self.nelec0
-        vec0 = self.vec0
+        vec0 = self.vec0 if vec0 is None else vec0
 
         lhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         lhs_ea = lhs_ea.reshape(len(orb_list), -1)
