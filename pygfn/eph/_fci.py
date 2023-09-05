@@ -18,19 +18,6 @@ def make_shape(nsite, nelec, nmode, nph_max):
     nb = num_strings(nsite, nelec_beta)
     return (na, nb) + (nph_max + 1,) * nmode
 
-def contract_h1e(h1e, v, nsite, nelec, nmode, nph_max):
-    shape = make_shape(nsite, nelec, nmode, nph_max)
-    c = v.reshape(shape)
-    na, nb = shape[:2]
-    c = c.reshape(na * nb, -1)
-    np = c.shape[1]
-
-    gen_hc = lambda i: fci_direct.contract_1e(h1e, c[:, i], nsite, nelec).reshape(na, nb)
-    hc = [gen_hc(i) for i in range(np)]
-    hc = numpy.asarray(hc).transpose(1, 2, 0)
-
-    return hc.reshape(shape)
-
 def contract_h2e(h2e, v, nsite, nelec, nmode, nph_max):
     shape = make_shape(nsite, nelec, nmode, nph_max)
     c = v.reshape(shape)
@@ -180,6 +167,57 @@ def kernel(h1e, eri, h1e1p, h1p, nsite, nmode, nelec, nph_max,
     )
     return e + h0, c
 
+def EPHFCI(mol_or_mf, mo=None, singlet=False, h1p=None, h1e1p=None, nph_max=1):
+    fci_obj = pyscf.fci.FCI(mol_or_mf, mo=mo, singlet=singlet)
+
+    import inspect
+    kwargs = inspect.signature(fci_obj.kernel).parameters
+    nsite = kwargs["norb"].default
+    h1e = kwargs["h1e"].default
+    eri = kwargs["eri"].default
+
+    assert h1e is not None
+    assert eri is not None
+
+    assert h1p is not None
+    assert h1e1p is not None
+    assert nph_max > 0
+
+    def contract_h1e(h1e, v, nsite, nelec, nmode, nph_max):
+        shape = make_shape(nsite, nelec, nmode, nph_max)
+        c = v.reshape(shape)
+        na, nb = shape[:2]
+        c = c.reshape(na * nb, -1)
+        np = c.shape[1]
+
+        gen_hc = lambda i: fci_obj.contract_1e(h1e, c[:, i], nsite, nelec).reshape(na, nb)
+        hc = [gen_hc(i) for i in range(np)]
+        hc = numpy.asarray(hc).transpose(1, 2, 0)
+        return hc.reshape(shape)
+
+    def contract_h2e(h2e, v, nsite, nelec, nmode, nph_max):
+        shape = make_shape(nsite, nelec, nmode, nph_max)
+        c = v.reshape(shape)
+        na, nb = shape[:2]
+        c = c.reshape(na * nb, -1)
+        np = c.shape[1]
+
+        gen_hc = lambda i: fci_obj.contract_2e(h2e, c[:, i], nsite, nelec).reshape(na, nb)
+        hc = [gen_hc(i) for i in range(np)]
+        hc = numpy.asarray(hc).transpose(1, 2, 0)
+        return hc.reshape(shape)
+
+    h2e = fci_obj.absorb_h1e(h1e, eri, nsite, nelec, .5)
+
+    def hop(v):
+        c = v.reshape(shape)
+        hc  = contract_h1e(h1e, c, nsite, nelec, nmode, nph_max)
+        hc += contract_h1e1p(h1e1p, c, nsite, nelec, nmode, nph_max)
+        hc += contract_h1p(h1p, c, nsite, nelec, nmode, nph_max)
+        hv = hc.reshape(-1)
+        return hv
+
+
 
 if __name__ == '__main__':
     nsite = 2
@@ -205,7 +243,6 @@ if __name__ == '__main__':
     h1p = numpy.eye(nmode) * 1.1
     h1p[idx_mode + 1, idx_mode] = h1p[idx_mode, idx_mode + 1] = 0.1
 
-
     nelecs = [(ia, ib) for ia in range(nsite + 1) for ib in range(ia + 1)]
     for nelec in nelecs:
         c = numpy.random.random(make_shape(nsite, nelec, nmode, nph_max))
@@ -223,6 +260,17 @@ if __name__ == '__main__':
         assert err < 1e-10
 
         err = numpy.linalg.norm(hc2 - hc)
+        assert err < 1e-10
+
+        hc1 = fci.direct_ep.contract_ep(g, c, nsite, nelec, nph_max)
+        hc  = contract_h1e1p(h1e1p, c, nsite, nelec, nmode, nph_max)
+
+        err = numpy.linalg.norm(hc1 - hc)
+        assert err < 1e-10
+
+        hc1 = fci.direct_ep.contract_pp(h1p, c, nsite, nelec, nph_max)
+        hc  = contract_h1p(h1p, c, nsite, nelec, nmode, nph_max)
+        err = numpy.linalg.norm(hc1 - hc)
         assert err < 1e-10
 
 
