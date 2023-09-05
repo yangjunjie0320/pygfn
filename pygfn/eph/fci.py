@@ -2,15 +2,16 @@ import numpy
 
 import pyscf
 from pyscf import fci, lib
-from pyscf.fci.direct_spin1 import contract_1e
-from pyscf.fci.direct_spin1 import contract_2e
-
 from pyscf.fci.cistring import num_strings
 from pyscf.fci.cistring import gen_linkstr_index
 from pyscf.fci.direct_spin1 import _unpack_nelec
-from pyscf.fci.direct_ep import contract_pp
 
 import pygfn
+from _fci import make_shape
+from _fci import contract_h1e
+from _fci import contract_h2e
+from _fci import contract_h1e1p
+from _fci import contract_h1p
 
 def _pack(h, omega, eta, v=None, comp="ip"):
     assert h.shape == v.shape
@@ -22,17 +23,15 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     assert comp in ["ip", "ea"]
 
     norb = gfn_obj.norb
-    nelec0 = gfn_obj.nelec0
     nelec = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
     assert nelec[0] >= 0 and nelec[1] >= 0
     assert nelec[0] <= norb and nelec[1] <= norb
 
     h1e = gfn_obj._h1e
     eri = gfn_obj._eri
-    ene0 = gfn_obj.ene0
-
-    h1p = gfn_obj.h1p
     h1e1p = gfn_obj.h1e1p
+    h1p = gfn_obj.h1p
+    ene0 = gfn_obj.ene0
 
     vec_hdiag = gfn_obj._base.make_hdiag(h1e, eri, norb, nelec)
     vec_size = vec_hdiag.size
