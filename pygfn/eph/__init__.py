@@ -16,7 +16,7 @@ from pygfn.eph import _fci
 #
 #     raise NotImplementedError
 
-def FCI(m_or_mf, mo=None, singlet=None, h1p=None, h1e1p=None, nph_max=4):
+def FCI(m_or_mf=None, mo=None, singlet=None, h1p=None, h1e1p=None, nph_max=4):
     """FCI electronic-phonon solver. This function is a wrapper of the
     functions in pygfn.eph._fci.
 
@@ -42,42 +42,38 @@ def FCI(m_or_mf, mo=None, singlet=None, h1p=None, h1e1p=None, nph_max=4):
     nelec = inspect.signature(fci_obj.kernel).parameters['nelec'].default
     ecore = inspect.signature(fci_obj.kernel).parameters['ecore'].default
 
-    nsite = norb
-    nmode = h1e1p.shape[2]
-    assert h1p.shape == (nmode, nmode)
+    nmode = None
+    if h1p is not None and h1e1p is not None:
+        nmode = h1p.shape[0]
+        assert h1p.shape == (nmode, nmode)
+        assert h1e1p.shape[-1] == nmode
 
-    if mo is not None:
-        assert mo.ndim == h1e.ndim
-        assert mo.shape[-1] == norb
+        if mo is not None:
+            assert mo.ndim == h1e.ndim
+            assert mo.shape[-1] == norb
 
-        if h1e.ndim == 2:
-            h1e1p = numpy.einsum('mp,nq,mnI->pqI', mo, mo, h1e1p)
+            if h1e.ndim == 2:
+                h1e1p = numpy.einsum('mp,nq,mnI->pqI', mo, mo, h1e1p)
 
-        elif h1e.ndim == 3:
-            assert mo.ndim == 3
-            h1e1p = numpy.einsum('smp,snq,mnI->spqI', mo, mo, h1e1p)
-            assert h1e1p.shape == (2, norb, norb, nmode)
+            elif h1e.ndim == 3:
+                assert mo.ndim == 3
+                h1e1p = numpy.einsum('smp,snq,mnI->spqI', mo, mo, h1e1p)
+                assert h1e1p.shape == (2, norb, norb, nmode)
 
     class CISolver(pyscf.lib.StreamObject):
-        nroots = 1
+
         def __init__(self, mol=None):
             fci_obj.__class__.__init__(self, mol)
 
         def kernel(self, h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
-                   nmode=nmode, norb=norb, nsite=None,
-                   nelec=nelec, ci0=None, ecore=ecore,
-                   **kwargs):
-
-            if nsite is None:
-                nsite = norb
-            assert nsite == norb
+                   nmode=nmode, norb=norb, nelec=nelec, nph_max=nph_max,
+                   ci0=None, ecore=ecore, **kwargs):
 
             res = pygfn.eph._fci.kernel(
                 h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
-                nsite=nsite, nmode=nmode,
+                nsite=norb, nmode=nmode,
                 nelec=nelec, nph_max=nph_max,
                 ci0=ci0, h0=ecore, fci_obj=fci_obj,
-                nroots=self.nroots,
                 **kwargs
             )
 

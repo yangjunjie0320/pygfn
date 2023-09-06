@@ -165,96 +165,40 @@ def kernel(h1e, eri, h1e1p, h1p, nsite, nmode, nelec, nph_max,
     return e + h0, c
 
 if __name__ == '__main__':
-    # nsite = 4
-    # nmode = 4
-    # nph_max = 2
-    #
-    # u = 1.5
-    # g = 0.5
-    #
-    # h1e = numpy.zeros((nsite, nsite))
-    # idx_site = numpy.arange(nsite - 1)
-    # h1e[idx_site + 1, idx_site] = h1e[idx_site, idx_site + 1] = -1.0
-    #
-    # idx_site = numpy.arange(nsite)
-    # idx_mode = numpy.arange(nmode)
-    # eri = numpy.zeros((nsite, nsite, nsite, nsite))
-    # eri[idx_site, idx_site, idx_site, idx_site] = u
-    #
-    # h1e1p = numpy.zeros((nsite, nsite, nmode))
-    # h1e1p[idx_site, idx_site, idx_mode] = g
-    #
-    # idx_mode = numpy.arange(nmode - 1)
-    # h1p = numpy.eye(nmode) * 1.1
-    # h1p[idx_mode + 1, idx_mode] = h1p[idx_mode, idx_mode + 1] = 0.1
-    #
-    # nelecs = [(ia, ib) for ia in range(nsite + 1) for ib in range(ia + 1)]
-    # for nelec in nelecs:
-    #     ene_0, c_0 = fci.direct_ep.kernel(h1e, u, g, h1p, nsite, nelec, nph_max, tol=1e-10, max_cycle=1000, verbose=0)
-    #     ene_1, c_1 = kernel(h1e, eri, h1e1p, h1p, nsite, nmode, nelec, nph_max,
-    #                         tol=1e-10, max_cycle=1000, verbose=0, ci0=c_0, fci_obj=fci.direct_spin1)
-    #
-    #     ene_2, c_2 = kernel((h1e, h1e), (eri, eri, eri), (h1e1p, h1e1p),
-    #                         h1p, nsite, nmode, nelec, nph_max, tol=1e-10, max_cycle=1000,
-    #                         verbose=0, ci0=c_0, fci_obj=fci.direct_uhf)
-    #
-    #     err1 = numpy.linalg.norm(ene_1 - ene_0)
-    #     err2 = numpy.linalg.norm(ene_2 - ene_0)
-    #
-    #     assert err1 < 1e-10
-    #     assert err2 < 1e-10
-    #
-    #     print("E = %16.12f, err1 = %6.4e, err2 = %6.4e" % (ene_0, err1, err2))
+    nsite = 4
+    nmode = 4
+    nph_max = 2
 
-    # The abinitio calculation
-    m = pyscf.gto.Mole()
-    m.verbose = 0
-    m.atom = 'H 0 0 0; Li 0 0 1.1'
-    m.basis = '631g'
-    m.build()
+    u = 1.5
+    g = 0.5
 
-    from pyscf.lo.orth import orth_ao
-    coeff_lo = orth_ao(m, 'meta_lowdin')
+    h1e = numpy.zeros((nsite, nsite))
+    idx_site = numpy.arange(nsite - 1)
+    h1e[idx_site + 1, idx_site] = h1e[idx_site, idx_site + 1] = -1.0
 
-    d_ao = m.intor('int1e_r', comp=3).reshape(3, m.nao, m.nao)
-    d_lo = numpy.einsum('xmn,mp,nq->xpq', d_ao, coeff_lo, coeff_lo)
+    idx_site = numpy.arange(nsite)
+    idx_mode = numpy.arange(nmode)
+    eri = numpy.zeros((nsite, nsite, nsite, nsite))
+    eri[idx_site, idx_site, idx_site, idx_site] = u
 
-    fci_obj = fci.FCI(m, mo=coeff_lo)
-    fci_obj.nroots = 10
-    fci_obj.max_cycle = 1000
-    fci_obj.conv_tol = 1e-10
-    e, c = fci_obj.kernel()
+    h1e1p = numpy.zeros((nsite, nsite, nmode))
+    h1e1p[idx_site, idx_site, idx_mode] = g
 
+    idx_mode = numpy.arange(nmode - 1)
+    h1p = numpy.eye(nmode) * 1.1
+    h1p[idx_mode + 1, idx_mode] = h1p[idx_mode, idx_mode + 1] = 0.1
 
-    # The EPH calculation
-    import inspect
-    h1e = inspect.signature(fci_obj.kernel).parameters['h1e'].default
-    eri = inspect.signature(fci_obj.kernel).parameters['eri'].default
-    nelec = inspect.signature(fci_obj.kernel).parameters['nelec'].default
+    nelecs = [(ia, ib) for ia in range(nsite + 1) for ib in range(ia + 1)]
 
-    norb = coeff_lo.shape[1]
-    nmode = 1
-    state_1 = 0
-    state_2 = 2
-    omega = e[state_2] - e[state_1]
-    print("omega = ", omega)
-    print("ene = ", e)
+    for nelec in nelecs:
+        ene_0, c_0 = fci.direct_ep.kernel(h1e, u, g, h1p, nsite, nelec, nph_max,
+                                          tol=1e-10, max_cycle=1000, verbose=0, nroots=10)
 
-    dm_lo_1 = fci_obj.make_rdm1(c[state_1], norb, nelec)
-    dm_lo_2 = fci_obj.make_rdm1(c[state_2], norb, nelec)
+        import pygfn.eph
+        fci_obj = pygfn.eph.FCI()
+        ene_1, c_1 = fci_obj.kernel(h1e, eri, h1e1p, h1p, nmode, nsite, nelec, nph_max=nph_max, nroots=10)
 
-    aa = 1e-4
-    tdm_lo = fci_obj.trans_rdm1(c[state_1], c[state_2], norb, nelec)
-    td = numpy.einsum('pq,xpq->x', tdm_lo, d_lo)
-    vv = td / numpy.linalg.norm(td) * aa
-    vv = vv.reshape(nmode, 3)
-    h1e1p = numpy.einsum('Ix,xpq->pqI', vv, d_lo)
-
-    h1p = numpy.zeros((nmode, nmode))
-    h1p[0, 0] = omega
-
-    ene, c = kernel(h1e, eri, h1e1p, h1p, norb, nmode, nelec, 2, ci0=None, fci_obj=fci_obj, nroots=10, h0=m.energy_nuc())
-    xx = numpy.einsum("x,x->", td, td / numpy.linalg.norm(td) * aa)
-    print("xx = ", e[state_2] - xx, e[state_2] + xx)
-    print("ene = ", ene)
+        err = numpy.linalg.norm(ene_1 - ene_0)
+        print(err)
+        assert err < 1e-8
 
