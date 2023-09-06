@@ -111,15 +111,13 @@ def make_hdiag(h1e, eri, h1e1p, h1p, nsite, nelec, nmode, nph_max, fci_obj=None)
     na, nb = shape[:2]
 
     hdiag_e = fci_obj.make_hdiag(h1e, eri, nsite, nelec).reshape(na, nb)
-    hdiag   = numpy.hstack([hdiag_e] * (nph_max + 1) ** nmode).reshape(shape)
+    hdiag   = numpy.asarray([hdiag_e] * (nph_max + 1) ** nmode).reshape((nph_max+1,) * nmode + (na, nb))
+    hdiag   = hdiag.transpose([nmode, nmode+1] + list(range(nmode)))
 
     for alph in range(nmode):
         for nph in range(nph_max+1):
-            s0 = [slice(None, None, None)] * (2 + nmode)  # +2 for electron indices
-            s0[2 + alph] = nph
-            s0 = tuple(s0)
-
-            hdiag[s0] += nph + 1
+            s0 = slices_for(alph, nmode, nph)
+            hdiag[s0] += nph * h1p[alph, alph]
 
     return hdiag.ravel()
 
@@ -168,6 +166,7 @@ if __name__ == '__main__':
     nsite = 4
     nmode = 4
     nph_max = 2
+    nroots = 5
 
     u = 1.5
     g = 0.5
@@ -191,14 +190,32 @@ if __name__ == '__main__':
     nelecs = [(ia, ib) for ia in range(nsite + 1) for ib in range(ia + 1)]
 
     for nelec in nelecs:
+        print("nelec = ", nelec )
         ene_0, c_0 = fci.direct_ep.kernel(h1e, u, g, h1p, nsite, nelec, nph_max,
-                                          tol=1e-10, max_cycle=1000, verbose=0, nroots=10)
+                                          tol=1e-10, max_cycle=1000, verbose=0, nroots=nroots)
 
-        import pygfn.eph
-        fci_obj = pygfn.eph.FCI()
-        ene_1, c_1 = fci_obj.kernel(h1e, eri, h1e1p, h1p, nmode, nsite, nelec, nph_max=nph_max, nroots=10)
+        ene_1, c_1 = kernel(h1e, eri, h1e1p, h1p, nmode, nsite, nelec, nph_max=nph_max, nroots=nroots)
 
-        err = numpy.linalg.norm(ene_1 - ene_0)
-        print(err)
-        assert err < 1e-8
+        err = numpy.linalg.norm(ene_1[0] - ene_0[0]) / ene_1.size
+        assert err < 1e-8, "error in energy: %6.4e" % err
 
+        hdiag_1 = make_hdiag(h1e, eri, h1e1p, 0.0 * h1p, nsite, nelec, nmode, nph_max)
+
+        hdiag_0 = []
+        shape = make_shape(nsite, nelec, nmode, nph_max)
+        h2e = fci.direct_spin1.absorb_h1e(h1e, eri, nsite, nelec, .5)
+        def hop(v):
+            c = v.reshape(shape)
+            hc = contract_h2e(h2e, c, nsite, nelec, nmode, nph_max)
+            hc += contract_h1e1p(h1e1p, c, nsite, nelec, nmode, nph_max)
+            hc += contract_h1p(0.0 * h1p, c, nsite, nelec, nmode, nph_max)
+            return hc.ravel()
+
+        for i in range(hdiag_1.size):
+            v = numpy.zeros_like(hdiag_1)
+            v[i] = 1.0
+            hdiag_0.append(hop(v)[i])
+
+        hdiag_0 = numpy.asarray(hdiag_0)
+        err = numpy.linalg.norm(hdiag_1 - hdiag_0) / hdiag_0.size
+        assert err < 1e-8, "error in hdiag: %6.4e" % err
