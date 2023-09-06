@@ -62,7 +62,6 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     assert comp in ["ip", "ea"]
 
     norb = gfn_obj.norb
-    nelec0 = gfn_obj.nelec0
     nelec = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
     assert nelec[0] >= 0 and nelec[1] >= 0
     assert nelec[0] <= norb and nelec[1] <= norb
@@ -121,9 +120,8 @@ class GreensFunctionMixin(lib.StreamObject):
 
     nsite  = None
     norb = None
-    coeff = None
 
-    nelec0 = None
+    _nelec0 = None
     _nelec_ip = None
     _nelec_ea = None
 
@@ -196,7 +194,7 @@ class GreensFunctionMixin(lib.StreamObject):
         norb = self.norb
         ps, qs, np, nq = _unpack_pq(ps, qs, norb)
 
-        nelec0 = self.nelec0
+        nelec0 = self._nelec0
         assert nelec0[0] >= nelec0[1]
 
         if comp == "ip":  # IP
@@ -248,8 +246,7 @@ class GreensFunctionMixin(lib.StreamObject):
         return res
 
     def kernel(self, omegas, eta=1e-2, ps=None, qs=None, vec0=None, verbose=None):
-        if self.ene0 is None or self.vec0 is None:
-            self.build(vec0=vec0)
+        self.build(vec0=vec0)
 
         assert self.ene0 is not None
         assert self.vec0 is not None
@@ -259,16 +256,34 @@ class GreensFunctionMixin(lib.StreamObject):
 
         return (gfn_ip, gfn_ea)
 
-class FullConfigurationInteractionSlow(GreensFunctionMixin):
-    def __init__(self, hf_obj=None):
-        if hf_obj is None:
-            self._base = fci.FCI(hf_obj, mo=None)
-            self._base.mf = None
+def is_build(gf_obj):
+    is_build = True
+    is_build = is_build or (gf_obj.ene0 is not None)
+    is_build = is_build or (gf_obj.vec0 is None)
+    is_build = is_build or (gf_obj.norb is None)
+    is_build = is_build or (gf_obj.nsite is None)
+    is_build = is_build or (gf_obj._h1e is None)
+    is_build = is_build or (gf_obj._eri is None)
+    is_build = is_build or (gf_obj.nelec0 is None)
+    is_build = is_build or (gf_obj._nelec_ip is None)
+    is_build = is_build or (gf_obj._nelec_ea is None)
+    return is_build
 
+class FullConfigurationInteractionSlow(GreensFunctionMixin):
+    _h1e = None
+    _eri = None
+    def __init__(self, hf_obj=None, nelec=None, h1e=None, eri=None):
         self._base = fci.FCI(hf_obj, mo=None)
         self._base.mf = hf_obj
 
+        self._nelec0 = nelec
+        self._h1e = h1e
+        self._eri = eri
+
     def build(self, vec0=None):
+        if is_build(self):
+            return None
+
         mf = self._base.mf
         assert mf is not None, "mf is not given"
 
@@ -283,7 +298,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         assert nelec0[0] >= nelec0[1]
         nelec_ip = (nelec0[0] - 1, nelec0[1])
         nelec_ea = (nelec0[0], nelec0[1] + 1)
-        self.nelec0 = nelec0
+        self._nelec0 = nelec0
         self._nelec_ip = nelec_ip
         self._nelec_ea = nelec_ea
 
@@ -309,7 +324,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
-        nelec0 = self.nelec0
+        nelec0 = self._nelec0
         vec0  = self.vec0 if vec0 is None else vec0
 
         rhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
@@ -321,7 +336,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
-        nelec0 = self.nelec0
+        nelec0 = self._nelec0
         vec0 = self.vec0 if vec0 is None else vec0
 
         lhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
@@ -333,7 +348,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
-        nelec0 = self.nelec0
+        nelec0 = self._nelec0
         vec0 = self.vec0 if vec0 is None else vec0
 
         rhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
@@ -345,7 +360,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
 
-        nelec0 = self.nelec0
+        nelec0 = self._nelec0
         vec0 = self.vec0 if vec0 is None else vec0
 
         lhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])

@@ -65,11 +65,33 @@ def FCI(m_or_mf=None, mo=None, singlet=None, h1p=None, h1e1p=None, nph_max=4):
         def __init__(self, mol=None):
             fci_obj.__class__.__init__(self, mol)
 
+        def gen_hop(self, h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
+                             norb=norb, nelec=nelec, nmode=nmode,
+                             nph_max=nph_max, fci_obj=fci_obj):
+
+            hop = pygfn.eph._fci.gen_hop(
+                h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
+                norb=norb, nelec=nelec, nmode=nmode,
+                nph_max=nph_max, fci_obj=fci_obj
+            )
+
+            return hop
+
+        def make_hdiag(self, h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
+                             norb=norb, nelec=nelec, nmode=nmode,
+                             nph_max=nph_max, fci_obj=fci_obj):
+
+            hdiag = pygfn.eph._fci.make_hdiag(
+                h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
+                norb=norb, nelec=nelec, nmode=nmode, nph_max=nph_max,
+                fci_obj=fci_obj
+            )
+
+            return hdiag
+
         def kernel(self, h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
                    nmode=nmode, norb=norb, nelec=nelec, nph_max=nph_max,
                    ci0=None, ecore=ecore, **kwargs):
-
-            print(ecore)
 
             res = pygfn.eph._fci.kernel(
                 h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,

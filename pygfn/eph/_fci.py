@@ -260,14 +260,23 @@ def gen_hop(h1e, eri, h1e1p, h1p, nsite, nelec, nmode, nph_max, fci_obj=None):
         fci_obj = pyscf.fci.direct_spin1
 
     shape = make_shape(nsite, nelec, nmode, nph_max)
-    h2e = fci_obj.absorb_h1e(h1e, eri, nsite, nelec, .5)
 
-    def hop(v):
-        c = v.reshape(shape)
-        hc = contract_h2e(h2e, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
-        hc += contract_h1e1p(h1e1p, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
-        hc += contract_h1p(h1p, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
-        return hc.ravel()
+    if eri is not None:
+        h2e = fci_obj.absorb_h1e(h1e, eri, nsite, nelec, .5)
+        def hop(v):
+            c = v.reshape(shape)
+            hc = contract_h2e(h2e, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
+            hc += contract_h1e1p(h1e1p, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
+            hc += contract_h1p(h1p, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
+            return hc.ravel()
+
+    else:
+        def hop(v):
+            c = v.reshape(shape)
+            hc = contract_h1e(h1e, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
+            hc += contract_h1e1p(h1e1p, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
+            hc += contract_h1p(h1p, c, nsite, nelec, nmode, nph_max, fci_obj=fci_obj)
+            return hc.ravel()
 
     return hop
 
