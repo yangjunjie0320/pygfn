@@ -1,15 +1,9 @@
-import numpy
-import scipy
-from line_profiler import profile
+import numpy, scipy
 
 import pyscf
-from pyscf import fci, cc, lib
-from pyscf.fci.direct_spin1 import contract_1e
-from pyscf.fci.direct_spin1 import contract_2e
+from pyscf import cc
 from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip
 from pyscf.cc.eom_rccsd import amplitudes_to_vector_ea
-
-from pyscf import __config__
 
 from pygfn.fci import _pack
 from pygfn.fci import GreensFunctionMixin
