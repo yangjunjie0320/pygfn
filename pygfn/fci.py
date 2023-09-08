@@ -132,7 +132,7 @@ class GreensFunctionMixin(lib.StreamObject):
     def __init__(self) -> None:
         raise NotImplementedError
 
-    def build(self):
+    def build(self, vec0=None):
         raise NotImplementedError
 
     def get_rhs_ip(self, orb_list=None, verbose=None):
@@ -258,15 +258,15 @@ class GreensFunctionMixin(lib.StreamObject):
 
 def is_build(gf_obj):
     is_build = True
-    is_build = is_build or (gf_obj.ene0 is not None)
-    is_build = is_build or (gf_obj.vec0 is None)
-    is_build = is_build or (gf_obj.norb is None)
-    is_build = is_build or (gf_obj.nsite is None)
-    is_build = is_build or (gf_obj._h1e is None)
-    is_build = is_build or (gf_obj._eri is None)
-    is_build = is_build or (gf_obj.nelec0 is None)
-    is_build = is_build or (gf_obj._nelec_ip is None)
-    is_build = is_build or (gf_obj._nelec_ea is None)
+    is_build = is_build and (gf_obj.ene0 is not None)
+    is_build = is_build and (gf_obj.vec0 is not None)
+    is_build = is_build and (gf_obj.norb is not None)
+    is_build = is_build and (gf_obj.nsite is not None)
+    is_build = is_build and (gf_obj._h1e is not None)
+    is_build = is_build and (gf_obj._eri is not None)
+    is_build = is_build and (gf_obj._nelec0 is not None)
+    is_build = is_build and (gf_obj._nelec_ip is not None)
+    is_build = is_build and (gf_obj._nelec_ea is not None)
     return is_build
 
 class FullConfigurationInteractionSlow(GreensFunctionMixin):
@@ -326,6 +326,8 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
 
         nelec0 = self._nelec0
         vec0  = self.vec0 if vec0 is None else vec0
+
+        print(vec0.shape)
 
         rhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
         rhs_ip = rhs_ip.reshape(len(orb_list), -1)
