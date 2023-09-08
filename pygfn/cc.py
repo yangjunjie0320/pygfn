@@ -314,6 +314,12 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
     def gen_hop_ea(self, verbose=None):
         return _gen_hop_direct(self, comp="ea", verbose=verbose)
 
+    def gen_hop_ip(self, verbose=None):
+        return _gen_hop_direct(self, comp="ip", verbose=verbose)
+
+    def gen_hop_ea(self, verbose=None):
+        return _gen_hop_direct(self, comp="ea", verbose=verbose)
+
 def CCGF(hf_obj, method="direct"):
     if method.lower() == "direct":
         assert isinstance(hf_obj, pyscf.scf.hf.RHF)
@@ -328,7 +334,7 @@ if __name__ == '__main__':
 
     m = gto.M(
         atom='H 0 0 0; Li 0 0 1.1',
-        basis='ccpvtz',
+        basis='ccpvqz',
         verbose=0,
     )
     rhf_obj = scf.RHF(m)
@@ -349,8 +355,8 @@ if __name__ == '__main__':
     omega_list = numpy.linspace(-0.5, 0.5, 21)
     coeff = rhf_obj.mo_coeff
     nao, nmo = coeff.shape
-    ps = [0, 1]
-    qs = [q for q in range(nmo)]
+    ps = [q for q in range(nmo)]
+    qs = [0, 1]
 
     gfn_obj = CCGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
@@ -364,6 +370,9 @@ if __name__ == '__main__':
 
     try:
         import fcdmft.solver.ccgf
+        from fcdmft.solver.ccgf import greens_b_vector_ip_rhf
+        from fcdmft.solver.ccgf import greens_b_vector_ea_rhf
+
         gfn_obj = fcdmft.solver.ccgf.CCGF(gfn_obj._base)
         gfn_obj.tol = 1e-8
 
