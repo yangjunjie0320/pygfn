@@ -341,23 +341,25 @@ class SlowFullConfigurationInteraction(GreensFunctionMixin):
         assert self._eri is not None
 
     def build(self, ci0=None, coeff=None, verbose=None):
-        m = self._base.mol
-        assert m is not None, "mf is not given"
+        m = self._base.m
+        mol_obj = self._base.mol
 
-        nelec = m.nelec if hasattr(m, "nelec") else m.mol.nelec
-        nelec = sorted(nelec, reverse=True)
-        nelec_ip = (nelec[0] - 1, nelec[1])
-        nelec_ea = (nelec[0], nelec[1] + 1)
-        self._nelec = nelec
-        self._nelec_ip = nelec_ip
-        self._nelec_ea = nelec_ea
+        if self._nelec is None:
+            nelec = m.nelec if hasattr(m, "nelec") else m.mol.nelec
+            nelec = sorted(nelec, reverse=True)
+            nelec_ip = (nelec[0] - 1, nelec[1])
+            nelec_ea = (nelec[0], nelec[1] + 1)
+            self._nelec = nelec
+            self._nelec_ip = nelec_ip
+            self._nelec_ea = nelec_ea
+        nelec = self._nelec
 
         if coeff is None:
-            if hasattr(m, "mo_coeff"):
-                coeff = m.mo_coeff
+            if hasattr(self._base, "m"):
+                coeff = self._base.m.mo_coeff
         assert coeff is not None, "coeff is not given"
 
-        fci_obj = fci.FCI(m.mol, mo=coeff)
+        fci_obj = fci.FCI(m, mo=coeff)
         fci_obj.max_cycle = self.max_cycle
         fci_obj.conv_tol = self.conv_tol
 

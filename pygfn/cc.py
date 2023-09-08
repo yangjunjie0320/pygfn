@@ -113,9 +113,9 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
         assert nelec[0] >= 0 and nelec[1] >= 0
 
         ene0 = self.ene0
+        assert ene0 is not None
 
         vec0 = self.vec0
-        # vec0 = vec0.reshape(-1)
         amp, lam = vector_to_amplitudes(vec0, gfn_obj=self)
         t1, t2 = amp
         l1, l2 = lam
@@ -328,13 +328,12 @@ def CCGF(hf_obj, method="direct"):
     else:
         raise NotImplementedError
 
-
 if __name__ == '__main__':
     from pyscf import gto, scf
 
     m = gto.M(
         atom='H 0 0 0; Li 0 0 1.1',
-        basis='ccpvqz',
+        basis='cc-pvdz',
         verbose=0,
     )
     rhf_obj = scf.RHF(m)
@@ -385,7 +384,6 @@ if __name__ == '__main__':
         assert numpy.linalg.norm(gfn1_ea - gfn2_ea) < 1e-6
         time1 = time.time()
         print("time = %12.8f" % (time1 - time0))
-
         print("All tests passed!")
 
     except ImportError:
