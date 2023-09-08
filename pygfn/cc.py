@@ -16,9 +16,9 @@ def amplitudes_to_vector(amp, lam=None, gfn_obj=None, comp=None):
     else:
         func = gfn_obj._base.amplitudes_to_vector
 
-    vec_amp = func(amp)
+    vec_amp = func(*amp)
     if lam is not None:
-        vec_lam = func(lam)
+        vec_lam = func(*lam)
         vec = lib.tag_array(vec_amp, vec_lam=vec_lam)
     else:
         vec = vec_amp
@@ -39,18 +39,14 @@ def vector_to_amplitudes(vec, gfn_obj=None, comp=None):
     vec_lam = getattr(vec, "vec_lam", None)
 
     amp = func(vec_amp)
-    lam = None
-    if vec_lam is not None:
-        lam = func(vec_lam)
+    lam = func(vec_lam) if vec_lam is not None else None
 
     return amp, lam
-
 
 def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     assert comp in ["ip", "ea"]
 
     norb = gfn_obj.norb
-    nelec0 = gfn_obj.nelec
     nelec  = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
     assert nelec[0] >= 0 and nelec[1] >= 0
     assert nelec[0] <= norb and nelec[1] <= norb
@@ -82,6 +78,7 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
 
     _h1e = None
     _eri = None
+    _eris = None
 
     max_space = 100
     def __init__(self, m=None):
@@ -118,8 +115,10 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
         ene0 = self.ene0
 
         vec0 = self.vec0
-        vec0 = vec0.reshape(-1)
-        (t1, t2), (l1, l2) = vector_to_amplitudes(vec0, gfn_obj=self)
+        # vec0 = vec0.reshape(-1)
+        amp, lam = vector_to_amplitudes(vec0, gfn_obj=self)
+        t1, t2 = amp
+        l1, l2 = lam
 
         if self._h1e is not None:
             h1e = numpy.asarray(self._h1e)
@@ -155,28 +154,32 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
         nao, nmo = coeff.shape[-2:]
         assert numpy.sum(occ) == nelec[0] + nelec[1]
 
+        # Rebuid the CCSD object.
         cc_obj = cc.CCSD(self._base._scf, mo_coeff=coeff, mo_occ=occ)
         nocc = cc_obj.nocc
         eris = cc_obj.ao2mo(mo_coeff=coeff)
         self._eris = eris
 
         t1, t2 = amp if amp is not None else (None, None)
-        ene0, t1, t2 = self._base.kernel(eris=eris, t1=t1, t2=t2)
-        ene0 = self._base.energy_elec(eris=eris, t1=t1, t2=t2)[0]
+        l1, l2 = lam if lam is not None else (None, None)
+
+        e_corr, t1, t2 = self._base.kernel(eris=eris, t1=t1, t2=t2)
         assert self._base.converged
+
+        ene0 = self._base.e_tot - self._base._scf.energy_nuc()
 
         if self.is_approx_lambda:
             l1, l2 = t1, t2
         else:
             l1, l2 = self._base.solve_lambda(eris=eris, t1=t1, t2=t2)
-        lam = (l1, l2)
+        self._base.l1 = l1
+        self._base.l2 = l2
+
         vec0 = amplitudes_to_vector((t1, t2), (l1, l2), gfn_obj=self)
 
         self.norb = nmo
         self.ene0 = ene0 - self._base.mol.energy_nuc()
         self.vec0 = vec0
-        self.amp = amp
-        self.lam = lam
 
     def get_rhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
@@ -185,7 +188,9 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
 
         nelec = self._nelec
         vec0  = self.vec0 if vec0 is None else vec0
-        (t1, t2), (l1, l2) = vector_to_amplitudes(vec0, gfn_obj=self)
+        amp, lam = vector_to_amplitudes(vec0, gfn_obj=self)
+        t1, t2 = amp
+        l1, l2 = lam
         nocc, nvir = t1.shape
 
         rhs_ip_list = []
@@ -195,21 +200,24 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
                 rhs_ip[p] = 1.0
 
             else:
-                rhs_ip = amplitudes_to_vector_ip(t1[:, p - nocc], t2[:, :, p - nocc, :])
+                rhs_ip = amplitudes_to_vector((t1[:, p - nocc], t2[:, :, p - nocc, :]), gfn_obj=self, comp="ip")
 
             rhs_ip_list.append(rhs_ip)
 
         rhs_ip = numpy.array(rhs_ip_list)
         return rhs_ip
 
-    def get_lhs_ip(self, orb_list=None, verbose=None):
+    def get_lhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
-        orb_list = numpy.array(orb_list if orb_list is not None else range(norb))
+        orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nocc = self._base.nocc
-        nvir = norb - nocc
-        t1, t2 = self.amp
-        l1, l2 = self.lam
+        nelec = self._nelec
+        vec0  = self.vec0 if vec0 is None else vec0
+        amp, lam = vector_to_amplitudes(vec0, gfn_obj=self)
+        t1, t2 = amp
+        l1, l2 = lam
+        nocc, nvir = t1.shape
 
         lhs_ip_list = []
         for p in orb_list:
@@ -231,19 +239,23 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
                 lhs_ip_1 = -l1[:, p - nocc]
                 lhs_ip_2 = -2 * l2[:, :, p - nocc, :] + l2[:, :, :, p - nocc]
 
-            lhs_ip = amplitudes_to_vector_ip(lhs_ip_1, lhs_ip_2)
+            lhs_ip = amplitudes_to_vector((lhs_ip_1, lhs_ip_2), gfn_obj=self, comp="ip")
             lhs_ip_list.append(lhs_ip)
 
         lhs_ip = numpy.array(lhs_ip_list)
         return lhs_ip
 
-    def get_rhs_ea(self, orb_list=None, verbose=None):
+    def get_rhs_ea(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
-        orb_list = numpy.array(orb_list if orb_list is not None else range(norb))
+        orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nocc = self._base.nocc
-        nvir = norb - nocc
-        t1, t2 = self.amp
+        nelec = self._nelec
+        vec0  = self.vec0 if vec0 is None else vec0
+        amp, lam = vector_to_amplitudes(vec0, gfn_obj=self)
+        t1, t2 = amp
+        l1, l2 = lam
+        nocc, nvir = t1.shape
 
         rhs_ea_list = []
         for q in orb_list:
@@ -252,21 +264,24 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
                 rhs_ea[q - nocc] = 1.0
 
             else:
-                rhs_ea = amplitudes_to_vector_ea(-t1[q, :], -t2[q, :, :, :])
+                rhs_ea = amplitudes_to_vector((-t1[q, :], -t2[q, :, :, :]), gfn_obj=self, comp="ea")
 
             rhs_ea_list.append(rhs_ea)
 
         rhs_ea = numpy.array(rhs_ea_list)
         return rhs_ea
 
-    def get_lhs_ea(self, orb_list=None, verbose=None):
+    def get_lhs_ea(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
-        orb_list = numpy.array(orb_list if orb_list is not None else range(norb))
+        orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nocc = self._base.nocc
-        nvir = norb - nocc
-        t1, t2 = self.amp
-        l1, l2 = self.lam
+        nelec = self._nelec
+        vec0  = self.vec0 if vec0 is None else vec0
+        amp, lam = vector_to_amplitudes(vec0, gfn_obj=self)
+        t1, t2 = amp
+        l1, l2 = lam
+        nocc, nvir = t1.shape
 
         lhs_ea_list = []
         for p in orb_list:
@@ -287,7 +302,7 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
                 lhs_ea_2 += 2 * numpy.einsum('k,jkba->jab', t1[:,p - nocc], l2)
                 lhs_ea_2 -= numpy.einsum('k,jkab->jab', t1[:,p - nocc], l2)
 
-            lhs_ea = amplitudes_to_vector_ea(lhs_ea_1, lhs_ea_2)
+            lhs_ea = amplitudes_to_vector((lhs_ea_1, lhs_ea_2), gfn_obj=self, comp="ea")
             lhs_ea_list.append(lhs_ea)
 
         lhs_ea = numpy.array(lhs_ea_list)
@@ -302,7 +317,7 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
 def CCGF(hf_obj, method="direct"):
     if method.lower() == "direct":
         assert isinstance(hf_obj, pyscf.scf.hf.RHF)
-        return CoupledClusterSingleDoubleSpin0Direct(hf_obj)
+        return DirectCoupledClusterSingleDouble(hf_obj)
 
     else:
         raise NotImplementedError
@@ -324,10 +339,10 @@ if __name__ == '__main__':
     cc_obj.verbose = 0
     cc_obj.conv_tol = 1e-8
     cc_obj.conv_tol_normt = 1e-8
-    ene_ccsd, t1, t2 = cc_obj.kernel()
+    eris = cc_obj.ao2mo()
+    ene_ccsd, t1, t2 = cc_obj.kernel(eris=eris)
+    cc_obj.solve_lambda(eris=eris, t1=t1, t2=t2)
     assert cc_obj.converged
-    vec0 = cc_obj.amplitudes_to_vector(t1, t2)
-
     print("ene_ccsd = %12.8f" % ene_ccsd)
 
     eta = 0.01
@@ -339,13 +354,15 @@ if __name__ == '__main__':
 
     gfn_obj = CCGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
-    gfn_obj.build(vec0=vec0)
+    gfn_obj.build()
 
     import time
     time0 = time.time()
     gfn1_ip, gfn1_ea = gfn_obj.kernel(omega_list, ps=ps, qs=qs, eta=eta)
     time1 = time.time()
     print("time = %12.8f" % (time1 - time0))
+
+    print(cc_obj.t1.shape, cc_obj.t2.shape, cc_obj.l1.shape, cc_obj.l2.shape)
 
     try:
         import fcdmft.solver.ccgf
