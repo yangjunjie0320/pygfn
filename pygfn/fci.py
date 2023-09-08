@@ -6,9 +6,6 @@ from pyscf import fci, lib
 from pyscf import __config__
 
 from pygfn.lib import gmres
-from pyscf.fci.direct_spin1 import contract_1e
-from pyscf.fci.direct_spin1 import contract_2e
-
 
 def _unpack_pq(ps, qs, norb):
     if ps is None:
@@ -31,7 +28,7 @@ def _pack(h, omega, eta, v=None, comp="ip"):
 
 def _gen_hop_slow(gfn_obj, comp="ip", verbose=None):
     norb = gfn_obj.norb
-    nelec0 = gfn_obj.nelec0
+    nelec = gfn_obj._nelec
     nelec  = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
 
     h1e = gfn_obj._h1e
@@ -83,8 +80,8 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     def gen_hv0(omega, eta):
         def hv0(v):
             c = v.reshape(na, nb)
-            hc_real = contract_2e(h2e, c.real, norb, nelec)
-            hc_imag = contract_2e(h2e, c.imag, norb, nelec)
+            hc_real = gfn_obj._base.contract_2e(h2e, c.real, norb, nelec)
+            hc_imag = gfn_obj._base.contract_2e(h2e, c.imag, norb, nelec)
             hc0 = hc_real + 1j * hc_imag - ene0 * c
             return _pack(hc0.reshape(-1), omega, eta, v=v, comp=comp)
         return hv0
@@ -118,21 +115,42 @@ class GreensFunctionMixin(lib.StreamObject):
     max_cycle = getattr(__config__, 'gf_max_cycle', 50)
     gmres_m = getattr(__config__, 'gf_gmres_m', 30)
 
-    nsite  = None
     norb = None
 
-    _nelec0 = None
+    _nelec = None
     _nelec_ip = None
     _nelec_ea = None
+    is_ip = True
+    is_ea = True
 
     ene0 = None
     vec0 = None
-    amp0 = None
+    amp   = None
+    lam  = None
 
     def __init__(self) -> None:
         raise NotImplementedError
 
-    def build(self, vec0=None):
+    @property
+    def nsite(self):
+        """
+        Number of sites. Alias of `norb`.
+        """
+        assert self.norb is not None
+        return self.norb
+
+    def _is_build(self):
+        raise NotImplementedError
+
+    def _check_sanity(self):
+        raise NotImplementedError
+
+    def build(self):
+        """
+        Build the Green's function object. Will run
+        scf
+        :return:
+        """
         raise NotImplementedError
 
     def get_rhs_ip(self, orb_list=None, verbose=None):
@@ -194,17 +212,17 @@ class GreensFunctionMixin(lib.StreamObject):
         norb = self.norb
         ps, qs, np, nq = _unpack_pq(ps, qs, norb)
 
-        nelec0 = self._nelec0
-        assert nelec0[0] >= nelec0[1]
+        nelec = self._nelec
+        assert nelec[0] >= nelec[1]
 
         if comp == "ip":  # IP
-            vec_rhs = self.get_rhs_ip(qs, verbose=verbose)
-            vec_lhs = self.get_lhs_ip(ps, verbose=verbose)
+            vec_rhs = self.get_rhs_ip(orb_list=qs, verbose=verbose)
+            vec_lhs = self.get_lhs_ip(orb_list=ps, verbose=verbose)
             gen_hv0, gen_hd0 = self.gen_hop_ip(verbose=verbose)
 
         else:  # EA
-            vec_rhs = self.get_rhs_ea(ps, verbose=verbose)
-            vec_lhs = self.get_lhs_ea(qs, verbose=verbose)
+            vec_rhs = self.get_rhs_ea(orb_list=ps, verbose=verbose)
+            vec_lhs = self.get_lhs_ea(orb_list=qs, verbose=verbose)
             gen_hv0, gen_hd0 = self.gen_hop_ea(verbose=verbose)
 
         vec_size = vec_rhs.shape[1]
@@ -245,91 +263,142 @@ class GreensFunctionMixin(lib.StreamObject):
         assert res.shape == (len(omegas), np, nq)
         return res
 
-    def kernel(self, omegas, eta=1e-2, ps=None, qs=None, vec0=None, verbose=None):
-        self.build(vec0=vec0)
+    def kernel(self, omegas, eta=1e-2, ps=None, qs=None, verbose=None, is_ip=None, is_ea=None):
+        if not self._is_build():
+            self.build()
 
-        assert self.ene0 is not None
-        assert self.vec0 is not None
+        self._check_sanity()
 
-        gfn_ip = self.solve_gfn_ip(omegas, ps=ps, qs=qs, eta=eta, verbose=verbose)
-        gfn_ea = self.solve_gfn_ea(omegas, ps=ps, qs=qs, eta=eta, verbose=verbose)
+        is_ip = is_ip if is_ip is not None else self.is_ip
+        is_ea = is_ea if is_ea is not None else self.is_ea
+
+        gfn_ip = None
+        if is_ip:
+            nelec = self._nelec
+            nelec_ip = self._nelec_ip
+            assert nelec_ip is not None
+            assert nelec_ip[0] + nelec_ip[1] == nelec[0] + nelec[1] - 1
+            assert nelec_ip[0] >= 0 and nelec_ip[1] >= 0
+            gfn_ip = self.solve_gfn_ip(omegas, ps=ps, qs=qs, eta=eta, verbose=verbose)
+
+        gfn_ea = None
+        if is_ea:
+            nelec = self._nelec
+            nelec_ea = self._nelec_ea
+            assert nelec_ea is not None
+            assert nelec_ea[0] + nelec_ea[1] == nelec[0] + nelec[1] + 1
+            assert nelec_ea[0] >= 0 and nelec_ea[1] >= 0
+            gfn_ea = self.solve_gfn_ea(omegas, ps=ps, qs=qs, eta=eta, verbose=verbose)
 
         return (gfn_ip, gfn_ea)
-
-def is_build(gf_obj):
-    is_build = True
-    is_build = is_build and (gf_obj.ene0 is not None)
-    is_build = is_build and (gf_obj.vec0 is not None)
-    is_build = is_build and (gf_obj.norb is not None)
-    is_build = is_build and (gf_obj.nsite is not None)
-    is_build = is_build and (gf_obj._h1e is not None)
-    is_build = is_build and (gf_obj._eri is not None)
-    is_build = is_build and (gf_obj._nelec0 is not None)
-    is_build = is_build and (gf_obj._nelec_ip is not None)
-    is_build = is_build and (gf_obj._nelec_ea is not None)
-    return is_build
-
-class FullConfigurationInteractionSlow(GreensFunctionMixin):
+class SlowFullConfigurationInteraction(GreensFunctionMixin):
     _h1e = None
     _eri = None
-    def __init__(self, hf_obj=None, nelec=None, h1e=None, eri=None):
-        self._base = fci.FCI(hf_obj, mo=None)
-        self._base.mf = hf_obj
+    max_space = 100
+    def __init__(self, m=None):
+        self._base = fci.FCI(m, mo=None)
+        self._base.m = m
 
-        self._nelec0 = nelec
-        self._h1e = h1e
-        self._eri = eri
+    def _is_build(self):
+        is_build = True
+        is_build = is_build and (self._base is not None)
+        is_build = is_build and (self.ene0 is not None)
+        is_build = is_build and (self.vec0 is not None)
 
-    def build(self, vec0=None):
-        if is_build(self):
-            return None
+        is_build = is_build and (self.norb is not None)
+        is_build = is_build and (self._nelec is not None)
 
-        mf = self._base.mf
-        assert mf is not None, "mf is not given"
+        is_build = is_build and (self._h1e is not None)
+        is_build = is_build and (self._eri is not None)
 
-        coeff = self._base.mf.mo_coeff
-        assert coeff is not None
+        if is_build:
+            log = lib.logger.new_logger(self, self.verbose)
+            log.warn("GF object is already built, skipping.")
 
-        self._base = fci.FCI(self._base.mol, mo=coeff)
-        self._base.mf = mf
-        ene0, vec0 = self._base.kernel(ci0=vec0)
+        return is_build
 
-        nelec0 = self._base.nelec
-        assert nelec0[0] >= nelec0[1]
-        nelec_ip = (nelec0[0] - 1, nelec0[1])
-        nelec_ea = (nelec0[0], nelec0[1] + 1)
-        self._nelec0 = nelec0
+    def _check_sanity(self):
+        norb = self.norb
+        nelec = self._nelec
+        assert nelec[0] >= 0 and nelec[1] >= 0
+
+        ene0 = self.ene0
+
+        vec0 = self.vec0
+        vec0 = vec0.reshape(-1)
+        ndet_alph = fci.cistring.num_strings(norb, nelec[0])
+        ndet_beta = fci.cistring.num_strings(norb, nelec[1])
+        assert self._base is not None
+        assert ene0 is not None
+        assert vec0.shape == (ndet_alph * ndet_beta, )
+        self.vec0 = vec0.reshape(-1)
+
+        h1e = numpy.asarray(self._h1e)
+        if h1e.ndim == 2:
+            assert h1e.shape == (norb, norb)
+        elif h1e.ndim == 3:
+            assert h1e.shape == (2, norb, norb)
+
+        assert self._eri is not None
+
+    def build(self, ci0=None, coeff=None, verbose=None):
+        m = self._base.mol
+        assert m is not None, "mf is not given"
+
+        nelec = m.nelec if hasattr(m, "nelec") else m.mol.nelec
+        assert nelec[0] >= nelec[1]
+        nelec_ip = (nelec[0] - 1, nelec[1])
+        nelec_ea = (nelec[0], nelec[1] + 1)
+        self._nelec = nelec
         self._nelec_ip = nelec_ip
         self._nelec_ea = nelec_ea
+
+        if coeff is None:
+            if hasattr(m, "mo_coeff"):
+                coeff = m.mo_coeff
+        assert coeff is not None, "coeff is not given"
+
+        fci_obj = fci.FCI(m.mol, mo=coeff)
+        fci_obj.max_cycle = self.max_cycle
+        fci_obj.conv_tol = self.conv_tol
 
         import inspect
         kwargs = inspect.signature(self._base.kernel).parameters
         norb = kwargs["norb"].default
-        norb2 = (norb + 1) * norb // 2
         h1e = kwargs["h1e"].default
         eri = kwargs["eri"].default
 
-        assert h1e.shape == (norb, norb)
-        assert eri.shape == (norb2, norb2)
+        ene0, vec0 = fci_obj.kernel(
+            norb=norb, nelec=nelec, h1e=h1e, eri=eri,
+            ci0=ci0, verbose=verbose, tol=self.conv_tol,
+            max_cycle=self.max_cycle,
+            max_space=self.max_space,
+            ecore=0.0
+        )
 
+        self._base = fci_obj
         self.norb = norb
-        self.ene0 = ene0 - self._base.mol.energy_nuc()
+        self.ene0 = ene0
         self.vec0 = vec0
         self._h1e = h1e
         self._eri = eri
 
-        self.nsite = norb
-
     def get_rhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nelec0 = self._nelec0
+        nelec = self._nelec
+        nelec_ip = self._nelec_ip
+        assert nelec_ip[0] + nelec_ip[1] == nelec[0] + nelec[1] - 1
         vec0  = self.vec0 if vec0 is None else vec0
 
-        print(vec0.shape)
+        if nelec_ip[0] == nelec[0] - 1:
+            des_op = fci.addons.des_a
+        else:
+            des_op = fci.addons.des_b
 
-        rhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
+        rhs_ip = numpy.asarray([des_op(vec0, norb, nelec, p).reshape(-1) for p in orb_list])
         rhs_ip = rhs_ip.reshape(len(orb_list), -1)
 
         return rhs_ip
@@ -337,11 +406,19 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
     def get_lhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nelec0 = self._nelec0
-        vec0 = self.vec0 if vec0 is None else vec0
+        nelec = self._nelec
+        nelec_ip = self._nelec_ip
+        assert nelec_ip[0] + nelec_ip[1] == nelec[0] + nelec[1] - 1
+        vec0  = self.vec0 if vec0 is None else vec0
 
-        lhs_ip = numpy.asarray([fci.addons.des_a(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
+        if nelec_ip[0] == nelec[0] - 1:
+            des_op = fci.addons.des_a
+        else:
+            des_op = fci.addons.des_b
+
+        lhs_ip = numpy.asarray([des_op(vec0, norb, nelec, p).reshape(-1) for p in orb_list])
         lhs_ip = lhs_ip.reshape(len(orb_list), -1)
 
         return lhs_ip
@@ -349,11 +426,19 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
     def get_rhs_ea(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nelec0 = self._nelec0
-        vec0 = self.vec0 if vec0 is None else vec0
+        nelec = self._nelec
+        nelec_ea = self._nelec_ea
+        assert nelec_ea[0] + nelec_ea[1] == nelec[0] + nelec[1] + 1
+        vec0  = self.vec0 if vec0 is None else vec0
 
-        rhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
+        if nelec_ea[0] == nelec[0] + 1:
+            cre_op = fci.addons.cre_a
+        else:
+            cre_op = fci.addons.cre_b
+
+        rhs_ea = numpy.asarray([cre_op(vec0, norb, nelec, p).reshape(-1) for p in orb_list])
         rhs_ea = rhs_ea.reshape(len(orb_list), -1)
 
         return rhs_ea
@@ -361,11 +446,19 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
     def get_lhs_ea(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
         orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nelec0 = self._nelec0
-        vec0 = self.vec0 if vec0 is None else vec0
+        nelec = self._nelec
+        nelec_ea = self._nelec_ea
+        assert nelec_ea[0] + nelec_ea[1] == nelec[0] + nelec[1] + 1
+        vec0  = self.vec0 if vec0 is None else vec0
 
-        lhs_ea = numpy.asarray([fci.addons.cre_b(vec0, norb, nelec0, p).reshape(-1) for p in orb_list])
+        if nelec_ea[0] == nelec[0] + 1:
+            cre_op = fci.addons.cre_a
+        else:
+            cre_op = fci.addons.cre_b
+
+        lhs_ea = numpy.asarray([cre_op(vec0, norb, nelec, p).reshape(-1) for p in orb_list])
         lhs_ea = lhs_ea.reshape(len(orb_list), -1)
 
         return lhs_ea
@@ -376,7 +469,7 @@ class FullConfigurationInteractionSlow(GreensFunctionMixin):
     def gen_hop_ea(self, verbose=None):
         return _gen_hop_slow(self, comp="ea", verbose=verbose)
 
-class FullConfigurationInteractionDirectSpin1(FullConfigurationInteractionSlow):
+class DirectFullConfigurationInteraction(SlowFullConfigurationInteraction):
     def gen_hop_ip(self, verbose=None):
         return _gen_hop_direct(self, comp="ip", verbose=verbose)
 
@@ -385,10 +478,10 @@ class FullConfigurationInteractionDirectSpin1(FullConfigurationInteractionSlow):
 
 def FCIGF(hf_obj, method="slow"):
     if method.lower() == "slow":
-        return FullConfigurationInteractionSlow(hf_obj)
+        return SlowFullConfigurationInteraction(hf_obj)
 
     elif method.lower() == "direct":
-        return FullConfigurationInteractionDirectSpin1(hf_obj)
+        return DirectFullConfigurationInteraction(hf_obj)
 
     else:
         raise NotImplementedError
@@ -416,7 +509,7 @@ if __name__ == '__main__':
 
     gfn_obj = FCIGF(rhf_obj, method="direct")
     gfn_obj.conv_tol = 1e-8
-    gfn_obj.build(vec0=vec_fci)
+    gfn_obj.build()
 
     import time
     time0 = time.time()

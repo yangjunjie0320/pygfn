@@ -1,23 +1,57 @@
 import numpy, scipy
 
 import pyscf
-from pyscf import cc
+from pyscf import cc, lib
 from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip
 from pyscf.cc.eom_rccsd import amplitudes_to_vector_ea
 
 from pygfn.fci import _pack
 from pygfn.fci import GreensFunctionMixin
+
+def amplitudes_to_vector(amp, lam, gfn_obj=None, comp=None):
+    assert (comp is None) or (comp in ["ip", "ea"])
+
+    if comp == "ip":
+        amplitudes_to_vector = gfn_obj._base.eomip_method().amplitudes_to_vector
+    elif comp == "ea":
+        amplitudes_to_vector = gfn_obj._base.eomea_method().amplitudes_to_vector
+    else:
+        amplitudes_to_vector = gfn_obj._base.amplitudes_to_vector
+
+    vec_amp = amplitudes_to_vector(amp)
+    vec_lam = amplitudes_to_vector(lam)
+    vec = numpy.concatenate((vec_amp, vec_lam))
+    return vec
+
+def vector_to_amplitudes(vec, gfn_obj=None, comp=None):
+    assert (comp is None) or (comp in ["ip", "ea"])
+
+    if comp == "ip":
+        vector_to_amplitudes = gfn_obj._base.eomip_method().vector_to_amplitudes
+    elif comp == "ea":
+        vector_to_amplitudes = gfn_obj._base.eomea_method().vector_to_amplitudes
+    else:
+        vector_to_amplitudes = gfn_obj._base.vector_to_amplitudes
+
+    size = vec.size // 2
+    vec_amp = vec[:size]
+    vec_lam = vec[size:]
+    assert vec_amp.size == vec_lam.size
+
+    amp = vector_to_amplitudes(vec_amp)
+    lam = vector_to_amplitudes(vec_lam)
+    return amp, lam
+
 def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     assert comp in ["ip", "ea"]
 
     norb = gfn_obj.norb
-    nelec0 = gfn_obj.nelec0
+    nelec0 = gfn_obj.nelec
     nelec  = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
     assert nelec[0] >= 0 and nelec[1] >= 0
     assert nelec[0] <= norb and nelec[1] <= norb
 
-    from pyscf.cc.eom_rccsd import EOMIP, EOMEA
-    eom_obj = EOMEA(gfn_obj._base) if comp == "ea" else EOMIP(gfn_obj._base)
+    eom_obj = gfn_obj._base.eomea_method() if comp == "ea" else gfn_obj._base.eomip_method()
     imds = eom_obj.make_imds(eris=gfn_obj._eris)
 
     vec_hdiag = eom_obj.get_diag(imds=imds)
@@ -39,17 +73,60 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     return gen_hv0, gen_hd0
 
 
-class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
+class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
     is_approx_lambda = True
 
-    def __init__(self, hf_obj=None):
-        if hf_obj is None:
-            self._base = None
+    _h1e = None
+    _eri = None
 
-        self._base : cc.ccsd.RCCSD = cc.CCSD(hf_obj)
-        self._base.verbose = 0
+    max_space = 100
+    def __init__(self, m=None):
+        if isinstance(m, pyscf.scf.hf.SCF):
+            self._base = cc.CCSD(m)
 
-    def build(self, vec0=None):
+        elif isinstance(m, pyscf.cc.ccsd.CCSD):
+            self._base = m
+
+        else:
+            self._base = object()
+            self._base.m = m
+
+    def _is_build(self):
+        is_build = True
+        is_build = is_build and (self._base is not None)
+        is_build = is_build and (self.ene0 is not None)
+        is_build = is_build and (self.vec0 is not None)
+
+        is_build = is_build and (self.norb is not None)
+        is_build = is_build and (self._nelec is not None)
+
+        if is_build:
+            log = lib.logger.new_logger(self, self.verbose)
+            log.warn("GF object is already built, skipping.")
+
+        return is_build
+
+    def _check_sanity(self):
+        norb = self.norb
+        nelec = self._nelec
+        assert nelec[0] >= 0 and nelec[1] >= 0
+
+        ene0 = self.ene0
+
+        vec0 = self.vec0
+        vec0 = vec0.reshape(-1)
+        (t1, t2), (l1, l2) = vector_to_amplitudes(vec0, gfn_obj=self)
+
+        if self._h1e is not None:
+            h1e = numpy.asarray(self._h1e)
+            if h1e.ndim == 2:
+                assert h1e.shape == (norb, norb)
+            elif h1e.ndim == 3:
+                assert h1e.shape == (2, norb, norb)
+
+            assert self._eri is not None
+
+    def build(self, amp=None, lam=None, coeff=None, verbose=None):
         coeff = self._base._scf.mo_coeff
         assert coeff is not None
         nao, nmo = coeff.shape
@@ -67,13 +144,13 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
         ene0, t1, t2 = self._base.kernel(eris=eris, t1=t1, t2=t2)
         assert self._base.converged
         vec0 = self._base.amplitudes_to_vector(t1, t2)
-        amp0 = (t1, t2)
+        amp = (t1, t2)
 
         if self.is_approx_lambda:
             l1, l2 = t1, t2
         else:
             l1, l2 = self._base.solve_lambda(eris=eris, t1=t1, t2=t2)
-        lam0 = (l1, l2)
+        lam = (l1, l2)
         self._base.l1 = l1
         self._base.l2 = l2
 
@@ -88,8 +165,8 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
         self.norb = nmo
         self.ene0 = ene0 - self._base.mol.energy_nuc()
         self.vec0 = vec0
-        self.amp0 = amp0
-        self.lam0 = lam0
+        self.amp = amp
+        self.lam = lam
 
     def get_rhs_ip(self, orb_list=None, verbose=None):
         norb = self.norb
@@ -97,7 +174,7 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
 
         nocc = self._base.nocc
         nvir = norb - nocc
-        t1, t2 = self.amp0
+        t1, t2 = self.amp
 
         rhs_ip_list = []
         for p in orb_list:
@@ -119,8 +196,8 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
 
         nocc = self._base.nocc
         nvir = norb - nocc
-        t1, t2 = self.amp0
-        l1, l2 = self.lam0
+        t1, t2 = self.amp
+        l1, l2 = self.lam
 
         lhs_ip_list = []
         for p in orb_list:
@@ -154,7 +231,7 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
 
         nocc = self._base.nocc
         nvir = norb - nocc
-        t1, t2 = self.amp0
+        t1, t2 = self.amp
 
         rhs_ea_list = []
         for q in orb_list:
@@ -176,8 +253,8 @@ class CoupledClusterSingleDoubleSpin0Direct(GreensFunctionMixin):
 
         nocc = self._base.nocc
         nvir = norb - nocc
-        t1, t2 = self.amp0
-        l1, l2 = self.lam0
+        t1, t2 = self.amp
+        l1, l2 = self.lam
 
         lhs_ea_list = []
         for p in orb_list:
