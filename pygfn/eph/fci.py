@@ -2,22 +2,18 @@ import numpy
 
 import pyscf
 from pyscf import fci, lib
-from pyscf.fci.cistring import num_strings
-from pyscf.fci.cistring import gen_linkstr_index
-from pyscf.fci.direct_spin1 import _unpack_nelec
 
 import pygfn
 from pygfn.fci import _pack
+from pygfn.eph._fci import make_shape
 
 def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     assert comp in ["ip", "ea"]
 
-    norb = gfn_obj.norb
+    nsite = gfn_obj.nsite
     nmode = gfn_obj.nmode
     nph_max = gfn_obj.nph_max
     nelec = gfn_obj._nelec_ip if comp == "ip" else gfn_obj._nelec_ea
-    assert nelec[0] >= 0 and nelec[1] >= 0
-    assert nelec[0] <= norb and nelec[1] <= norb
 
     h1e = gfn_obj._h1e
     eri = gfn_obj._eri
@@ -25,19 +21,18 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     h1p = gfn_obj._h1p
     ene0 = gfn_obj.ene0
 
-    vec_hdiag = gfn_obj._base.make_hdiag(h1e, eri, h1e1p, h1p, norb, nelec, nmode, nph_max)
+    vec_hdiag = gfn_obj._base.make_hdiag(h1e, eri, h1e1p, h1p, nsite, nelec, nmode, nph_max)
     vec_size = vec_hdiag.size
     vec_ones = numpy.ones(vec_size)
 
-    na = fci.cistring.num_strings(norb, nelec[0])
-    nb = fci.cistring.num_strings(norb, nelec[1])
-    assert na * nb * (nph_max + 1) ** nmode == vec_size
+    shape = make_shape(nsite, nelec, nmode, nph_max)
+    assert numpy.prod(shape) == vec_size
 
-    hop = gfn_obj._base.gen_hop(h1e, eri, h1e1p, h1p, norb, nelec, nmode, nph_max)
+    hop = gfn_obj._base.gen_hop(h1e, eri, h1e1p, h1p, nsite, nelec, nmode, nph_max)
 
     def gen_hv0(omega, eta):
         def hv0(v):
-            c = v.reshape(na, nb)
+            c = v.reshape(shape)
             hc_real = hop(c.real)
             hc_imag = hop(c.imag)
             hc0 = hc_real + 1j * hc_imag - ene0 * c
@@ -49,36 +44,61 @@ def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
 
     return gen_hv0, gen_hd0
 
-class WithPhonon(lib.StreamObject):
+class WithPhonon(pygfn.fci.DirectFullConfigurationInteraction):
     nmode = None # Number of phonon modes
+    nph_max = 4  # Maximum number of phonons in each mode
+
     _h1p   = None # Phonon Hamiltonian
     _h1e1p = None # Electron-phonon interaction Hamiltonian
 
-class FullConfigurationInteractionDirectSpin1(pygfn.fci.FullConfigurationInteractionDirectSpin1, WithPhonon):
-    def __init__(self, hf_obj=None, nelec=None, h1e=None, eri=None, h1p=None, h1e1p=None):
-        self._base = pygfn.eph.FCI(hf_obj, mo=None, h1p=h1p, h1e1p=h1e1p)
-        self._base.mf = hf_obj
-
-        self._nelec0 = nelec
-
-        assert h1p is not None
-        assert h1e1p is not None
-
-        nmode = h1p.shape[0]
-        norb = h1e1p.shape[-2]
-        nsite = norb
-
-        assert h1p.shape == (nmode, nmode)
-        assert h1e1p.shape == (nmode, nsite, nsite)
-
-        self.nmode = nmode
-        self.norb = norb
-        self.nsite = nsite
-
-        self._h1e = h1e
-        self._eri = eri
+    def __init__(self, m=None, h1p=None, h1e1p=None):
+        super().__init__(m=m)
         self._h1p = h1p
         self._h1e1p = h1e1p
+
+    def _is_build(self):
+        is_build = super()._is_build()
+        is_build = is_build and self._h1p is not None
+        is_build = is_build and self._h1e1p is not None
+        return is_build
+
+    def _check_sanity(self):
+        assert self._base is not None
+
+        nsite = self.nsite
+        nmode = self.nmode
+        nph_max = self.nph_max
+        nelec = self._nelec
+        assert nelec[0] >= 0 and nelec[1] >= 0
+
+        ene0 = self.ene0
+        assert ene0 is not None
+
+        shape  = [fci.cistring.num_strings(nsite, n) for n in nelec]
+        shape += [(nph_max + 1) for alph in range(nmode)]
+        size = numpy.prod(shape)
+        vec0 = self.vec0.reshape(size,)
+        ci0 = vec0.reshape(shape)
+
+        h1e = numpy.asarray(self._h1e)
+        if h1e.ndim == 2:
+            assert h1e.shape == (nsite, nsite)
+        elif h1e.ndim == 3:
+            assert h1e.shape == (2, nsite, nsite)
+
+        assert self._eri is not None
+
+        h1p = numpy.asarray(self._h1p)
+        assert h1p.shape == (nmode, nmode)
+
+        # As the electron dimensions are symmetric, h1e1p might
+        # be transformed to a 2D array (nsite2, nmode).
+        # nsite2 = nsite * (nsite + 1) // 2
+        h1e1p = numpy.asarray(self._h1e1p)
+        if h1e1p.ndim == 3:
+            assert h1e1p.shape == (nsite, nsite, nmode)
+        elif h1e1p.ndim == 4:
+            assert h1e1p.shape == (2, nsite, nsite, nmode)
 
     def get_rhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb

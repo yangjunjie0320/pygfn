@@ -328,7 +328,7 @@ if __name__ == '__main__':
 
     m = gto.M(
         atom='H 0 0 0; Li 0 0 1.1',
-        basis='ccpvdz',
+        basis='ccpvtz',
         verbose=0,
     )
     rhf_obj = scf.RHF(m)
@@ -361,8 +361,6 @@ if __name__ == '__main__':
     gfn1_ip, gfn1_ea = gfn_obj.kernel(omega_list, ps=ps, qs=qs, eta=eta)
     time1 = time.time()
     print("time = %12.8f" % (time1 - time0))
-
-    print(cc_obj.t1.shape, cc_obj.t2.shape, cc_obj.l1.shape, cc_obj.l2.shape)
 
     try:
         import fcdmft.solver.ccgf

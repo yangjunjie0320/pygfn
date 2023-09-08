@@ -318,20 +318,19 @@ class SlowFullConfigurationInteraction(GreensFunctionMixin):
         return is_build
 
     def _check_sanity(self):
+        assert self._base is not None
+
         norb = self.norb
         nelec = self._nelec
         assert nelec[0] >= 0 and nelec[1] >= 0
 
         ene0 = self.ene0
-
-        vec0 = self.vec0
-        vec0 = vec0.reshape(-1)
-        ndet_alph = fci.cistring.num_strings(norb, nelec[0])
-        ndet_beta = fci.cistring.num_strings(norb, nelec[1])
-        assert self._base is not None
         assert ene0 is not None
-        assert vec0.shape == (ndet_alph * ndet_beta, )
-        self.vec0 = vec0.reshape(-1)
+
+        shape  = [fci.cistring.num_strings(norb, n) for n in nelec]
+        size = numpy.prod(shape)
+        vec0 = self.vec0.reshape(size,)
+        ci0 = vec0.reshape(shape)
 
         h1e = numpy.asarray(self._h1e)
         if h1e.ndim == 2:

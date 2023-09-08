@@ -83,8 +83,8 @@ def FCI(m_or_mf=None, mo=None, singlet=None, h1p=None, h1e1p=None, nph_max=4):
 
             hdiag = pygfn.eph._fci.make_hdiag(
                 h1e=h1e, eri=eri, h1e1p=h1e1p, h1p=h1p,
-                norb=norb, nelec=nelec, nmode=nmode, nph_max=nph_max,
-                fci_obj=fci_obj
+                norb=norb, nelec=nelec, nmode=nmode,
+                nph_max=nph_max,fci_obj=fci_obj
             )
 
             return hdiag

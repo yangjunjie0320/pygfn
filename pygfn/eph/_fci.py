@@ -9,6 +9,8 @@ from pyscf.fci.cistring import gen_linkstr_index
 from pyscf.fci.direct_spin1 import _unpack_nelec
 from pyscf.fci.direct_ep import slices_for, slices_for_cre, slices_for_des
 
+# Electron-phonon FCI ground state solver
+# Note: this implementation is an improved version of pyscf.fci.direct_ep
 
 def make_shape(nsite, nelec, nmode, nph_max):
     """
