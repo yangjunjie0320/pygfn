@@ -310,6 +310,7 @@ if __name__ == '__main__':
     idx_mode = numpy.arange(nmode)
     eri = numpy.zeros((nsite, nsite, nsite, nsite))
     eri[idx_site, idx_site, idx_site, idx_site] = u
+    eri = None
 
     h1e1p = numpy.zeros((nsite, nsite, nmode))
     h1e1p[idx_site, idx_site, idx_mode] = g
