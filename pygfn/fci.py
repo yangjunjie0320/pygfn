@@ -346,7 +346,7 @@ class SlowFullConfigurationInteraction(GreensFunctionMixin):
         assert m is not None, "mf is not given"
 
         nelec = m.nelec if hasattr(m, "nelec") else m.mol.nelec
-        assert nelec[0] >= nelec[1]
+        nelec = sorted(nelec, reverse=True)
         nelec_ip = (nelec[0] - 1, nelec[1])
         nelec_ea = (nelec[0], nelec[1] + 1)
         self._nelec = nelec

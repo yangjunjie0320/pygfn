@@ -2,45 +2,49 @@ import numpy, scipy
 
 import pyscf
 from pyscf import cc, lib
-from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip
-from pyscf.cc.eom_rccsd import amplitudes_to_vector_ea
 
 from pygfn.fci import _pack
 from pygfn.fci import GreensFunctionMixin
 
-def amplitudes_to_vector(amp, lam, gfn_obj=None, comp=None):
+def amplitudes_to_vector(amp, lam=None, gfn_obj=None, comp=None):
     assert (comp is None) or (comp in ["ip", "ea"])
 
     if comp == "ip":
-        amplitudes_to_vector = gfn_obj._base.eomip_method().amplitudes_to_vector
+        func = gfn_obj._base.eomip_method().amplitudes_to_vector
     elif comp == "ea":
-        amplitudes_to_vector = gfn_obj._base.eomea_method().amplitudes_to_vector
+        func = gfn_obj._base.eomea_method().amplitudes_to_vector
     else:
-        amplitudes_to_vector = gfn_obj._base.amplitudes_to_vector
+        func = gfn_obj._base.amplitudes_to_vector
 
-    vec_amp = amplitudes_to_vector(amp)
-    vec_lam = amplitudes_to_vector(lam)
-    vec = numpy.concatenate((vec_amp, vec_lam))
+    vec_amp = func(amp)
+    if lam is not None:
+        vec_lam = func(lam)
+        vec = lib.tag_array(vec_amp, vec_lam=vec_lam)
+    else:
+        vec = vec_amp
+
     return vec
 
 def vector_to_amplitudes(vec, gfn_obj=None, comp=None):
     assert (comp is None) or (comp in ["ip", "ea"])
 
     if comp == "ip":
-        vector_to_amplitudes = gfn_obj._base.eomip_method().vector_to_amplitudes
+        func = gfn_obj._base.eomip_method().vector_to_amplitudes
     elif comp == "ea":
-        vector_to_amplitudes = gfn_obj._base.eomea_method().vector_to_amplitudes
+        func = gfn_obj._base.eomea_method().vector_to_amplitudes
     else:
-        vector_to_amplitudes = gfn_obj._base.vector_to_amplitudes
+        func = gfn_obj._base.vector_to_amplitudes
 
-    size = vec.size // 2
-    vec_amp = vec[:size]
-    vec_lam = vec[size:]
-    assert vec_amp.size == vec_lam.size
+    vec_amp = vec
+    vec_lam = getattr(vec, "vec_lam", None)
 
-    amp = vector_to_amplitudes(vec_amp)
-    lam = vector_to_amplitudes(vec_lam)
+    amp = func(vec_amp)
+    lam = None
+    if vec_lam is not None:
+        lam = func(vec_lam)
+
     return amp, lam
+
 
 def _gen_hop_direct(gfn_obj, comp="ip", verbose=None):
     assert comp in ["ip", "ea"]
@@ -88,12 +92,12 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
             self._base = m
 
         else:
-            self._base = object()
-            self._base.m = m
+            self._base = None
 
     def _is_build(self):
         is_build = True
         is_build = is_build and (self._base is not None)
+        is_build = is_build and (self._eris is not None)
         is_build = is_build and (self.ene0 is not None)
         is_build = is_build and (self.vec0 is not None)
 
@@ -126,41 +130,47 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
 
             assert self._eri is not None
 
-    def build(self, amp=None, lam=None, coeff=None, verbose=None):
-        coeff = self._base._scf.mo_coeff
+    def build(self, amp=None, lam=None, coeff=None, occ=None, verbose=None):
+        if self._base is None:
+            # TODO: Implement this. Given the h1e and eri,
+            # TODO: build the CCSD object.
+            assert self._nelec is not None
+            assert self._h1e is not None
+            assert self._eri is not None
+            raise NotImplementedError
+
+        m = self._base.mol
+        nelec = m.nelec
+        nelec = sorted(nelec, reverse=True)
+        nelec_ip = (nelec[0] - 1, nelec[1])
+        nelec_ea = (nelec[0], nelec[1] + 1)
+        self._nelec = nelec
+        self._nelec_ip = nelec_ip
+        self._nelec_ea = nelec_ea
+
+        coeff = self._base._scf.mo_coeff if coeff is None else coeff
+        occ = self._base._scf.mo_occ if occ is None else occ
         assert coeff is not None
-        nao, nmo = coeff.shape
-        occ = self._base._scf.get_occ(mo_coeff=coeff)
+        assert occ is not None
+        nao, nmo = coeff.shape[-2:]
+        assert numpy.sum(occ) == nelec[0] + nelec[1]
 
         cc_obj = cc.CCSD(self._base._scf, mo_coeff=coeff, mo_occ=occ)
         nocc = cc_obj.nocc
         eris = cc_obj.ao2mo(mo_coeff=coeff)
         self._eris = eris
 
-        if vec0 is None:
-            t1, t2 = cc_obj.init_amps(eris)[1:]
-        else:
-            t1, t2 = cc_obj.vector_to_amplitudes(vec0, nmo, nocc)
+        t1, t2 = amp if amp is not None else (None, None)
         ene0, t1, t2 = self._base.kernel(eris=eris, t1=t1, t2=t2)
+        ene0 = self._base.energy_elec(eris=eris, t1=t1, t2=t2)[0]
         assert self._base.converged
-        vec0 = self._base.amplitudes_to_vector(t1, t2)
-        amp = (t1, t2)
 
         if self.is_approx_lambda:
             l1, l2 = t1, t2
         else:
             l1, l2 = self._base.solve_lambda(eris=eris, t1=t1, t2=t2)
         lam = (l1, l2)
-        self._base.l1 = l1
-        self._base.l2 = l2
-
-        nelec0 = self._base.mol.nelec
-        assert nelec0[0] >= nelec0[1]
-        nelec_ip = (nelec0[0] - 1, nelec0[1])
-        nelec_ea = (nelec0[0], nelec0[1] + 1)
-        self.nelec0 = nelec0
-        self._nelec_ip = nelec_ip
-        self._nelec_ea = nelec_ea
+        vec0 = amplitudes_to_vector((t1, t2), (l1, l2), gfn_obj=self)
 
         self.norb = nmo
         self.ene0 = ene0 - self._base.mol.energy_nuc()
@@ -168,13 +178,15 @@ class DirectCoupledClusterSingleDouble(GreensFunctionMixin):
         self.amp = amp
         self.lam = lam
 
-    def get_rhs_ip(self, orb_list=None, verbose=None):
+    def get_rhs_ip(self, vec0=None, orb_list=None, verbose=None):
         norb = self.norb
-        orb_list = numpy.array(orb_list if orb_list is not None else range(norb))
+        orb_list = orb_list if orb_list is not None else range(norb)
+        orb_list = numpy.asarray(orb_list)
 
-        nocc = self._base.nocc
-        nvir = norb - nocc
-        t1, t2 = self.amp
+        nelec = self._nelec
+        vec0  = self.vec0 if vec0 is None else vec0
+        (t1, t2), (l1, l2) = vector_to_amplitudes(vec0, gfn_obj=self)
+        nocc, nvir = t1.shape
 
         rhs_ip_list = []
         for p in orb_list:
